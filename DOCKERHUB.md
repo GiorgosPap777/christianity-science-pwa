@@ -78,4 +78,4 @@ want the index to survive restarts (then `REBUILD_INDEX=0` becomes useful).
 
 ## Tags
 
-`latest`, `1.0.2` — `linux/amd64`.
+`latest`, `1.0.3` — `linux/amd64`.

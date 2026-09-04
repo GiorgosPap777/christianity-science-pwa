@@ -6,7 +6,6 @@ index.json
 .github/
 .gitignore
 .env
-.env.example
 __pycache__/
 *.pyc
 .DS_Store

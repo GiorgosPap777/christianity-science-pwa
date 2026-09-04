@@ -1,7 +1,7 @@
 # Generated from the audio archive at build/run time
 index.json
 
-# Local compose configuration (contains your archive path)
+# docker compose auto-loads this if present; never commit a local one
 .env
 
 __pycache__/

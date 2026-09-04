@@ -41,7 +41,7 @@ docker run -d --name christianity-science -p 8080:8080 \
 Or with Compose:
 
 ```bash
-cp .env.example .env      # set ARCHIVE_PATH
+# set the archive path in compose.yaml, then:
 docker compose up -d
 ```
 
