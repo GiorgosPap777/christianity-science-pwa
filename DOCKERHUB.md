@@ -49,11 +49,13 @@ reported in the container log rather than silently skipped.
 | `ARCHIVE_ROOT` | `/archive` | where the season folders are mounted |
 | `HOST` / `PORT` | `0.0.0.0` / `8080` | listen address inside the container |
 | `REBUILD_INDEX` | `1` | set `0` to skip the startup scan |
-| `INDEX_OUT` | `/app/_site/index.json` | where the generated index is written |
+| `INDEX_OUT` | `/data/index.json` | where the generated index is written |
 | `TLS_CERT` / `TLS_KEY` | unset | serve HTTPS directly instead of behind a proxy |
 
 Runs as **uid 10001**. If your archive is not readable by that user, add
-`--user "$(id -u):$(id -g)"`.
+`--user "$(id -u):$(id -g)"` — the index is written to `/data`, which any uid
+can write, so overriding the user is safe. Mount a volume at `/data` if you
+want the index to survive restarts (then `REBUILD_INDEX=0` becomes useful).
 
 ## What it does
 
@@ -76,4 +78,4 @@ Runs as **uid 10001**. If your archive is not readable by that user, add
 
 ## Tags
 
-`latest`, `1.0.1` — `linux/amd64`.
+`latest`, `1.0.2` — `linux/amd64`.

@@ -26,6 +26,10 @@ SITE_DIR = os.path.dirname(os.path.abspath(__file__))
 # configurable; locally it defaults to the folder this script sits in.
 ARCHIVE_ROOT = os.environ.get("ARCHIVE_ROOT") or os.path.dirname(SITE_DIR)
 SITE_NAME = "_site"          # URL prefix -- kept fixed, sw.js depends on it
+# The generated index may live outside the site directory when that directory
+# is not writable by the running user (see the container's /data).
+INDEX_OUT = os.environ.get("INDEX_OUT")
+INDEX_OUT = os.path.abspath(INDEX_OUT) if INDEX_OUT else None
 
 RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 NO_CACHE_EXT = (".html", ".js", ".css", ".json", ".webmanifest")
@@ -64,6 +68,8 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
         different mounts."""
         clean = urllib.parse.urlsplit(path).path
         prefix = "/" + SITE_NAME
+        if INDEX_OUT and clean == prefix + "/index.json":
+            return INDEX_OUT
         if clean == prefix or clean.startswith(prefix + "/"):
             saved, self.directory = self.directory, SITE_DIR
             try:
@@ -228,6 +234,8 @@ def main():
     print(f"Χριστιανισμός - Επιστήμη")
     print(f"  archive : {ARCHIVE_ROOT}")
     print(f"  site    : {SITE_DIR}")
+    if INDEX_OUT:
+        print(f"  index   : {INDEX_OUT}")
     print(f"  open    : {url}")
     if scheme == "http" and args.host not in ("127.0.0.1", "localhost", "::1"):
         print("  note    : install/offline need HTTPS on a non-localhost host"

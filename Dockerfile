@@ -17,7 +17,7 @@ LABEL org.opencontainers.image.title="Χριστιανισμός - Επιστή�
       org.opencontainers.image.url="https://hub.docker.com/r/giorgospap777/christianity-science-pwa" \
       org.opencontainers.image.documentation="https://github.com/GiorgosPap777/christianity-science-pwa#readme" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="1.0.1"
+      org.opencontainers.image.version="1.0.2"
 
 # ffprobe supplies the per-part durations the episode progress bar needs.
 RUN apk add --no-cache ffmpeg
@@ -29,15 +29,20 @@ RUN chmod +x /app/_site/entrypoint.sh \
  && adduser -D -u 10001 app \
  && chown -R app:app /app
 
+# The index is generated at runtime, so it must be writable no matter which
+# uid the container is told to run as (people override this to match their
+# archive's ownership). /app stays read-only; only /data is written.
+RUN install -d -m 0777 /data
+
 ENV ARCHIVE_ROOT=/archive \
     HOST=0.0.0.0 \
     PORT=8080 \
     REBUILD_INDEX=1 \
+    INDEX_OUT=/data/index.json \
     PYTHONUNBUFFERED=1
 
 USER app
 EXPOSE 8080
-VOLUME ["/archive"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD python3 -c "import os,sys,urllib.request; \

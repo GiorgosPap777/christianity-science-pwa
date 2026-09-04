@@ -81,7 +81,7 @@ cannot be parsed — a missing part, non-contiguous numbering, an unreadable nam
 | `ARCHIVE_ROOT` | `/archive` (container) | where the season folders live |
 | `HOST` / `PORT` | `0.0.0.0` / `8080` | listen address |
 | `REBUILD_INDEX` | `1` | set `0` to skip the startup scan |
-| `INDEX_OUT` | `index.json` beside the site | generated index location |
+| `INDEX_OUT` | `/data/index.json` (container) | generated index location |
 | `TLS_CERT` / `TLS_KEY` | unset | serve HTTPS directly |
 
 `serve.py` also takes `--root`, `--host`, `--port`, `--cert`, `--key`.
