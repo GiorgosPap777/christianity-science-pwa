@@ -1,0 +1,21 @@
+{
+  "id": "/_site/",
+  "name": "Χριστιανισμός - Επιστήμη",
+  "short_name": "Χρ. - Επιστήμη",
+  "description": "Προσωπικό αρχείο της εκπομπής Χριστιανισμός - Επιστήμη.",
+  "start_url": "/_site/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#16161a",
+  "theme_color": "#16161a",
+  "lang": "el",
+  "dir": "ltr",
+  "categories": ["education", "music"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

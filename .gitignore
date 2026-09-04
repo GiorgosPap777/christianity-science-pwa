@@ -1,0 +1,9 @@
+# Generated from the audio archive at build/run time
+index.json
+
+# Local compose configuration (contains your archive path)
+.env
+
+__pycache__/
+*.pyc
+.DS_Store

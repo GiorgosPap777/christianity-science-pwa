@@ -1,0 +1,67 @@
+# Builds and publishes the image to Docker Hub.
+#
+# One-time setup (Docker Hub linkage):
+#   1. Docker Hub -> Account Settings -> Personal access tokens -> generate one
+#      with Read & Write scope.
+#   2. GitHub -> this repo -> Settings -> Secrets and variables -> Actions:
+#        DOCKERHUB_USERNAME = giorgospap777
+#        DOCKERHUB_TOKEN    = <the token>
+#
+# After that every push to main republishes :latest, and pushing a tag like
+# v1.2.3 also publishes :1.2.3.
+
+name: Publish image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+env:
+  IMAGE: giorgospap777/christianity-science-pwa
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Derive tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Sync Docker Hub overview
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.IMAGE }}
+          # Docker Hub caps this at 100 BYTES, and Greek is 2 bytes/char.
+          short-description: "Installable offline player for the Χριστιανισμός - Επιστήμη podcast archive"
+          readme-filepath: ./DOCKERHUB.md

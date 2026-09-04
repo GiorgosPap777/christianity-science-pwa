@@ -1,0 +1,16 @@
+# index.json is regenerated from the mounted archive at container start,
+# so the image never ships a stale copy (and stays small).
+index.json
+
+.git/
+.github/
+.gitignore
+.env
+.env.example
+__pycache__/
+*.pyc
+.DS_Store
+Dockerfile
+.dockerignore
+compose.yaml
+DOCKERHUB.md
