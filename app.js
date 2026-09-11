@@ -284,7 +284,11 @@ function renderSeasons() {
   const searching = !!view.query;
   let shown = 0;
 
-  for (const s of SEASONS) {
+  // Seasons follow the same newest/oldest toggle as the episodes inside them.
+  // Copy before reversing: SEASONS stays index-ordered for SEASONS[ep.season-1].
+  const seasons = store.ui.sort === "newest" ? SEASONS.slice().reverse() : SEASONS;
+
+  for (const s of seasons) {
     const eps = s.episodes.filter(matches);
     shown += eps.length;
     if ((searching || store.ui.unheardOnly) && eps.length === 0) continue;

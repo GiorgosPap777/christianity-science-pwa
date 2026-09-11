@@ -139,7 +139,7 @@ server-side state, no account, and no network calls beyond your own server.
 | `index.html` `styles.css` `app.js` `i18n.js` | the site |
 | `sw.js` | service worker: offline shell + range-aware audio cache |
 | `manifest.webmanifest` | PWA metadata |
-| `make_icons.py` | regenerates `icons/` (pure Python, no image libraries) |
+| `make_icons.py` | regenerates `icons/` from `icon-source.jpg` (ffmpeg crops/scales, PNGs written in pure Python) |
 | `Dockerfile` `entrypoint.sh` `compose.yaml` | container build and deployment |
 
 ## Publishing

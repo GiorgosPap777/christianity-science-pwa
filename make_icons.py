@@ -1,123 +1,120 @@
 #!/usr/bin/env python3
-"""Generate the PWA icon set. No imaging libraries needed -- shapes are sampled
-analytically with supersampling and written out as PNG via zlib.
+"""Generate the PWA icon set from the app artwork.
 
     python3 _site/make_icons.py
 
-Writes icons/ next to this script. Re-run only if you change the design.
+The source (icon-source.jpg) is a phone home-screen mockup; only the rounded
+square icon panel is kept, so none of the mockup background survives. ffmpeg
+does the crop and the high-quality downscale (it is already a project
+dependency for ffprobe); the PNGs are encoded here with zlib, so no imaging
+library is needed. Writes icons/ next to this script.
+
+Re-run only if you change the artwork or the crop.
 """
 
-import math
 import os
 import struct
+import subprocess
+import sys
 import zlib
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
+HERE = os.path.dirname(os.path.abspath(__file__))
+SRC = os.path.join(HERE, "icon-source.jpg")
+OUT = os.path.join(HERE, "icons")
 
-BG     = (0x1B, 0x1B, 0x20)
-CROSS  = (0xF4, 0xEA, 0xE2)
-ORBIT  = (0xD9, 0x9A, 0x6C)
+# The icon panel inside the 1024x1024 mockup: width, height, x, y.
+# Measured from the panel's bright rim, not eyeballed.
+CROP = (706, 706, 162, 182)
 
-SS = 3  # supersampling factor per axis
+# Flat colour behind the artwork on full-bleed icons, sampled from the panel.
+PANEL_BG = (0x10, 0x42, 0x6E)
 
-
-# ---------------------------------------------------------------- geometry
-
-def rounded_rect(x, y, r):
-    """Point-in-rounded-unit-square (corner radius r, in 0..0.5)."""
-    cx = min(max(x, r), 1 - r)
-    cy = min(max(y, r), 1 - r)
-    dx, dy = x - cx, y - cy
-    return dx * dx + dy * dy <= r * r
+CORNER_N = 5.0   # superellipse exponent: |x/r|^n + |y/r|^n <= 1, iOS-ish
+SS = 4           # vertical supersamples per row, for antialiased corners
 
 
-def in_rect(x, y, x0, y0, x1, y1):
-    return x0 <= x <= x1 and y0 <= y <= y1
+def artwork(size):
+    """Crop the panel out of the mockup and scale it to size; raw rgb24."""
+    if not os.path.exists(SRC):
+        sys.exit(f"missing {SRC}")
+    w, h, x, y = CROP
+    out = subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-i", SRC,
+         "-vf", f"crop={w}:{h}:{x}:{y},scale={size}:{size}:flags=lanczos",
+         "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+        capture_output=True).stdout
+    if len(out) != size * size * 3:
+        sys.exit("ffmpeg failed; is it installed?")
+    return bytearray(out)
 
 
-def ellipse_ring(x, y, cx, cy, a, b, angle, half_w):
-    """Approximate distance to an ellipse outline, rotated by `angle` radians."""
-    dx, dy = x - cx, y - cy
-    ca, sa = math.cos(-angle), math.sin(-angle)
-    u = dx * ca - dy * sa
-    v = dx * sa + dy * ca
-    g = (u / a) ** 2 + (v / b) ** 2 - 1.0
-    gx, gy = 2 * u / (a * a), 2 * v / (b * b)
-    grad = math.hypot(gx, gy)
-    if grad < 1e-9:
-        return False
-    return abs(g) / grad <= half_w
+def flatten(size, scale):
+    """Artwork at `scale` of the canvas, rounded, composited on the panel colour.
 
-
-def sample(x, y, mark_scale, full_bleed):
-    """Return an RGB colour for a point in the unit square, or None for outside."""
-    if not full_bleed and not rounded_rect(x, y, 0.22):
-        return None
-
-    # mark coordinates, scaled about the centre
-    mx = (x - 0.5) / mark_scale + 0.5
-    my = (y - 0.5) / mark_scale + 0.5
-
-    # orbit ring, tilted
-    if ellipse_ring(mx, my, 0.5, 0.5, 0.46, 0.205, math.radians(-24), 0.019):
-        return ORBIT
-    # electron bead riding the orbit
-    ang = math.radians(-24)
-    bx = 0.5 + 0.46 * math.cos(math.radians(150)) * math.cos(ang) \
-             - 0.205 * math.sin(math.radians(150)) * math.sin(ang)
-    by = 0.5 + 0.46 * math.cos(math.radians(150)) * math.sin(ang) \
-             + 0.205 * math.sin(math.radians(150)) * math.cos(ang)
-    if (mx - bx) ** 2 + (my - by) ** 2 <= 0.048 ** 2:
-        return ORBIT
-
-    # latin cross
-    if in_rect(mx, my, 0.452, 0.175, 0.548, 0.825):
-        return CROSS
-    if in_rect(mx, my, 0.318, 0.345, 0.682, 0.441):
-        return CROSS
-
-    return BG
-
-
-def render(size, mark_scale, full_bleed):
-    rows = []
-    inv = 1.0 / (size * SS)
-    for py in range(size):
-        row = bytearray()
-        for px in range(size):
-            r = g = b = a = 0
-            for sy in range(SS):
-                y = (py * SS + sy + 0.5) * inv
-                for sx in range(SS):
-                    x = (px * SS + sx + 0.5) * inv
-                    c = sample(x, y, mark_scale, full_bleed)
-                    if c is not None:
-                        r += c[0]; g += c[1]; b += c[2]; a += 255
-            n = SS * SS
+    Used for the icons that must stay opaque. Rounding before compositing keeps
+    the mockup's neighbouring app icons from surviving in the corners; the
+    inset leaves a safe zone for the circular mask Android applies.
+    """
+    inner = max(1, int(round(size * scale)))
+    art = artwork(inner)
+    mask = squircle_alpha(inner)
+    off = (size - inner) // 2
+    canvas = bytearray(PANEL_BG * (size * size))
+    for row in range(inner):
+        for col in range(inner):
+            a = mask[row * inner + col]
             if a == 0:
-                row += b"\x00\x00\x00\x00"
+                continue
+            s = (row * inner + col) * 3
+            d = ((row + off) * size + col + off) * 3
+            if a == 255:
+                canvas[d:d + 3] = art[s:s + 3]
             else:
-                cov = a // n
-                # un-premultiply against covered samples so edges stay clean
-                k = a // 255
-                row += bytes((r // k, g // k, b // k, cov))
-        rows.append(bytes(row))
-    return rows
+                for k in range(3):
+                    canvas[d + k] = (art[s + k] * a + canvas[d + k] * (255 - a)) // 255
+    return canvas
 
 
-# -------------------------------------------------------------------- png
+def squircle_alpha(size):
+    """Antialiased coverage mask for the rounded-square corners."""
+    r = size / 2.0
+    a = bytearray(size * size)
+    for py in range(size):
+        cov = [0.0] * size
+        for s in range(SS):
+            dy = abs((py + (s + 0.5) / SS) - r)
+            tt = 1.0 - (dy / r) ** CORNER_N
+            xlim = r * (tt ** (1.0 / CORNER_N)) if tt > 0 else 0.0
+            for px in range(size):
+                dx = abs((px + 0.5) - r)
+                cov[px] += min(1.0, max(0.0, xlim - dx + 0.5))
+        base = py * size
+        for px in range(size):
+            a[base + px] = int(round(255 * cov[px] / SS))
+    return a
 
-def write_png(path, size, rows):
-    raw = b"".join(b"\x00" + r for r in rows)
 
-    def chunk(tag, data):
-        c = struct.pack(">I", len(data)) + tag + data
-        return c + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+def write_png(path, size, rgb, alpha=None):
+    if alpha is None:
+        ctype, bpp, data = 2, 3, bytes(rgb)
+    else:
+        ctype, bpp = 6, 4
+        out = bytearray(size * size * 4)
+        for i in range(size * size):
+            out[i * 4:i * 4 + 3] = rgb[i * 3:i * 3 + 3]
+            out[i * 4 + 3] = alpha[i]
+        data = bytes(out)
+    row = size * bpp
+    raw = b"".join(b"\x00" + data[y * row:(y + 1) * row] for y in range(size))
 
-    png = b"\x89PNG\r\n\x1a\n"
-    png += chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
-    png += chunk(b"IDAT", zlib.compress(raw, 9))
-    png += chunk(b"IEND", b"")
+    def chunk(tag, payload):
+        return (struct.pack(">I", len(payload)) + tag + payload +
+                struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF))
+
+    png = (b"\x89PNG\r\n\x1a\n" +
+           chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, ctype, 0, 0, 0)) +
+           chunk(b"IDAT", zlib.compress(raw, 9)) +
+           chunk(b"IEND", b""))
     with open(path, "wb") as fh:
         fh.write(png)
     return len(png)
@@ -126,15 +123,18 @@ def write_png(path, size, rows):
 def main():
     os.makedirs(OUT, exist_ok=True)
     jobs = [
-        ("icon-192.png",          192, 0.70, False),
-        ("icon-512.png",          512, 0.70, False),
-        ("icon-maskable-512.png", 512, 0.56, True),   # 40% safe zone for Android
-        ("apple-touch-icon.png",  180, 0.74, True),   # iOS applies its own mask
+        # name,                  size, rounded, inset scale
+        ("icon-192.png",          192, True,  None),
+        ("icon-512.png",          512, True,  None),
+        ("icon-maskable-512.png", 512, False, 0.76),  # safe zone for Android
+        ("apple-touch-icon.png",  180, False, 1.00),  # iOS applies its own mask
     ]
-    for name, size, scale, bleed in jobs:
-        rows = render(size, scale, bleed)
-        n = write_png(os.path.join(OUT, name), size, rows)
-        print(f"  {name:24s} {size}x{size}  {n/1024:6.1f} KB")
+    for name, size, rounded, scale in jobs:
+        rgb = flatten(size, scale) if scale else artwork(size)
+        alpha = squircle_alpha(size) if rounded else None
+        n = write_png(os.path.join(OUT, name), size, rgb, alpha)
+        shape = "rounded" if rounded else ("inset" if scale < 1 else "square")
+        print(f"  {name:24s} {size}x{size}  {n/1024:6.1f} KB  ({shape})")
 
 
 if __name__ == "__main__":

@@ -13,3 +13,6 @@ Dockerfile
 .dockerignore
 compose.yaml
 DOCKERHUB.md
+
+# only needed to regenerate icons/; the generated PNGs are what ship
+icon-source.jpg
