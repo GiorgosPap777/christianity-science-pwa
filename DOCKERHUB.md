@@ -63,7 +63,8 @@ want the index to survive restarts (then `REBUILD_INDEX=0` becomes useful).
   episode — across season boundaries.
 - Resume where you left off, per-episode listened tracking, "unheard only"
   filter, accent-insensitive Greek search by title words and dates.
-- Sleep timer, lock-screen controls with artwork.
+- Sleep timer, lock-screen controls with artwork, and a full-screen "now
+  playing" view on phones.
 - Greek/English interface toggle. Episode titles are never translated.
 - **Installable (PWA)** — full screen, own home-screen icon, works offline.
 - **Offline caching** — the episode you are listening to is kept on the device

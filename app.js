@@ -674,11 +674,18 @@ function updatePlayerText() {
   }
   const ep = cur.ep;
   title.textContent = ep.title;
-  sub.textContent = [
-    seasonLabel(SEASONS[ep.season - 1]),
-    t("ep.part", { n: cur.part + 1, total: ep.parts.length }),
-    epDate(ep),
-  ].join(" · ");
+  /* Spans, so the full-screen view can drop the part number, which its parts
+     bar already shows. The " · " separators come from styles.css. */
+  sub.textContent = "";
+  [["season", seasonLabel(SEASONS[ep.season - 1])],
+   ["part", t("ep.part", { n: cur.part + 1, total: ep.parts.length })],
+   ["date", epDate(ep)]].forEach((x) => {
+    const span = document.createElement("span");
+    span.className = "sub-" + x[0];
+    span.textContent = x[1];
+    sub.appendChild(span);
+  });
+  renderParts();
 
   /* On a phone only the check icon shows, so the label also goes into the
      accessible name and tooltip. */
@@ -728,7 +735,45 @@ function updateTimes() {
     const bar = $("#ep-progress");
     bar.setAttribute("role", "progressbar");
     bar.setAttribute("aria-valuenow", String(Math.round(pct)));
+
+    const segs = $("#p-segs").children;
+    const frac = dur ? Math.min(1, t0 / dur) : 0;
+    for (let i = 0; i < segs.length; i++) {
+      const w = i < cur.part ? 100 : i === cur.part ? frac * 100 : 0;
+      segs[i].firstChild.style.width = w.toFixed(2) + "%";
+    }
+    $("#np-left").textContent = t("np.left", { time: fmtTime(Math.max(0, total - done)) });
   }
+}
+
+/* One segment per part, sized by its duration; tapping one jumps there. */
+function renderParts() {
+  const host = $("#p-segs");
+  if (!cur) { host.textContent = ""; delete host.dataset.ep; return; }
+  const ep = cur.ep;
+  if (host.dataset.ep !== ep.id) {
+    host.dataset.ep = ep.id;
+    host.textContent = "";
+    ep.parts.forEach((part, i) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "p-seg";
+      b.style.flexGrow = String(part.dur || 1);
+      b.appendChild(document.createElement("i"));
+      b.addEventListener("click", () => {
+        if (cur && cur.ep === ep && i !== cur.part) loadEpisode(ep, i, 0, true);
+      });
+      host.appendChild(b);
+    });
+  }
+  Array.prototype.forEach.call(host.children, (b, i) => {
+    const lbl = t("ep.part", { n: i + 1, total: ep.parts.length });
+    b.title = lbl;
+    b.setAttribute("aria-label", lbl);
+    if (i === cur.part) b.setAttribute("aria-current", "step");
+    else b.removeAttribute("aria-current");
+  });
+  $("#np-part").textContent = t("ep.part", { n: cur.part + 1, total: ep.parts.length });
 }
 
 const ARTWORK = [
@@ -929,6 +974,7 @@ function wire() {
 
   /* keyboard */
   document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && npIsOpen()) { e.preventDefault(); closeNowPlaying(); return; }
     const tag = (e.target.tagName || "").toLowerCase();
     if (tag === "input" || tag === "select" || tag === "textarea") return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -953,14 +999,12 @@ function wire() {
   /* Keep the page's bottom padding equal to the player's real height, which
      changes when the controls row wraps. */
   const player = $("#player");
-  const syncPlayerHeight = () => {
-    const h = player.hidden ? 0 : player.offsetHeight;
-    document.documentElement.style.setProperty("--player-h", h + "px");
-  };
   if (window.ResizeObserver) new ResizeObserver(syncPlayerHeight).observe(player);
   window.addEventListener("resize", syncPlayerHeight);
   window.addEventListener("resize", renderOfflineChip);
   syncPlayerHeight();
+
+  wireNowPlaying();
 
   /* OS media keys and lock screen. Play and pause are explicit rather than a
      toggle, so a stale lock-screen button cannot invert the state. */
@@ -979,6 +1023,13 @@ function wire() {
       persistPosition(true);
     });
   }
+}
+
+function syncPlayerHeight() {
+  const player = $("#player");
+  if (npIsOpen()) return;                // the sheet's full height is not the bar's
+  const h = player.hidden ? 0 : player.offsetHeight;
+  document.documentElement.style.setProperty("--player-h", h + "px");
 }
 
 function markPlayingRow() {
@@ -1003,6 +1054,136 @@ function keyboardFocusedButton(el) {
 
 function cssEscape(s) {
   return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/["\\]/g, "\\$&");
+}
+
+/* ============================================================ now playing
+
+   On phones and tablets the player expands into a full-screen sheet. It is
+   the same element with the same controls, laid out larger (.player.expanded
+   in styles.css), plus the artwork and a bar of the episode's parts. Back,
+   Escape, the chevron or a swipe down closes it. */
+
+const NP_MEDIA = window.matchMedia("(max-width: 860px)");
+const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)");
+let npDrag = null;
+
+function npIsOpen() {
+  return $("#player").classList.contains("expanded");
+}
+
+function openNowPlaying() {
+  const player = $("#player");
+  if (!cur || player.hidden || !NP_MEDIA.matches || npIsOpen()) return;
+  player.classList.add("expanded");
+  player.setAttribute("role", "dialog");
+  player.setAttribute("aria-modal", "true");
+  player.setAttribute("aria-label", t("np.title"));
+  setBehindSheet(true);
+  /* An entry of its own, so the phone's back button closes the sheet
+     instead of leaving the app. */
+  history.pushState({ np: 1 }, "");
+  updateTimes();
+  renderOfflineChip();
+  $("#btn-np-close").focus({ preventScroll: true });
+}
+
+function closeNowPlaying(fromHistory) {
+  const player = $("#player");
+  if (!npIsOpen() || player.classList.contains("closing")) return;
+  if (!fromHistory && history.state && history.state.np) {
+    history.back();                      // popstate comes back here
+    return;
+  }
+  player.classList.add("closing");
+  if (REDUCED_MOTION.matches) { collapseNowPlaying(); return; }
+  const done = (e) => {
+    if (e && e.target !== player) return;
+    player.removeEventListener("animationend", done);
+    collapseNowPlaying();
+  };
+  player.addEventListener("animationend", done);
+  setTimeout(done, 400);                 // in case the animation never runs
+}
+
+function collapseNowPlaying() {
+  const player = $("#player");
+  if (!player.classList.contains("closing")) return;
+  const hadFocus = player.contains(document.activeElement);
+  player.classList.remove("expanded", "closing", "snap");
+  player.style.transform = "";
+  player.removeAttribute("role");
+  player.removeAttribute("aria-modal");
+  player.removeAttribute("aria-label");
+  setBehindSheet(false);
+  renderOfflineChip();
+  syncPlayerHeight();    // the bar may have changed size while covered
+  if (hadFocus) $("#btn-np-open").focus({ preventScroll: true });
+}
+
+/* Everything the sheet covers: out of the tab order and the accessibility
+   tree, and the status bar tinted to match the sheet's top. */
+function setBehindSheet(open) {
+  document.body.classList.toggle("np-open", open);
+  $$("body > header, body > main").forEach((el) => { el.inert = open; });
+  $("#btn-np-open").setAttribute("aria-expanded", String(open));
+  const top = getComputedStyle(document.documentElement).getPropertyValue("--np-top").trim();
+  $$('meta[name="theme-color"]').forEach((m) => {
+    if (!m.dataset.base) m.dataset.base = m.content;
+    m.content = open && top ? top : m.dataset.base;
+  });
+}
+
+function wireNowPlaying() {
+  const player = $("#player");
+  /* A reload keeps the history entry but not the sheet. */
+  if (history.state && history.state.np) history.replaceState(null, "");
+
+  $("#btn-np-open").addEventListener("click", (e) => {
+    e.stopPropagation();
+    openNowPlaying();
+  });
+  $("#btn-np-close").addEventListener("click", () => closeNowPlaying());
+  player.querySelector(".p-meta").addEventListener("click", () => openNowPlaying());
+  window.addEventListener("popstate", () => { if (npIsOpen()) closeNowPlaying(true); });
+  const onWidth = () => { if (!NP_MEDIA.matches) closeNowPlaying(); };
+  if (NP_MEDIA.addEventListener) NP_MEDIA.addEventListener("change", onWidth);
+  else if (NP_MEDIA.addListener) NP_MEDIA.addListener(onWidth);
+
+  /* Swipe up on the bar's title opens the sheet; swipe down on the sheet's
+     header or artwork closes it. Gestures that start on a control are left to
+     the control. */
+  player.addEventListener("pointerdown", (e) => {
+    if (!NP_MEDIA.matches || e.button > 0) return;
+    if (!e.target.closest(".np-head, .p-meta")) return;
+    if (e.target.closest("button, input, select, label")) return;
+    npDrag = { id: e.pointerId, y: e.clientY, t: e.timeStamp, dy: 0, open: npIsOpen() };
+  });
+  player.addEventListener("pointermove", (e) => {
+    if (!npDrag || e.pointerId !== npDrag.id) return;
+    const dy = e.clientY - npDrag.y;
+    if (!npDrag.open) {
+      if (dy < -24) { npDrag = null; openNowPlaying(); }
+      return;
+    }
+    npDrag.dy = Math.max(0, dy);
+    player.style.transform = npDrag.dy ? "translateY(" + npDrag.dy + "px)" : "";
+  });
+  const end = (e) => {
+    if (!npDrag || e.pointerId !== npDrag.id) return;
+    const d = npDrag;
+    npDrag = null;
+    if (!d.open || !npIsOpen() || !d.dy) return;
+    const speed = d.dy / Math.max(1, e.timeStamp - d.t);      // px per ms
+    if (d.dy > 110 || (d.dy > 40 && speed > 0.6)) {
+      closeNowPlaying();
+    } else {
+      player.classList.add("snap");                           // spring back
+      player.style.transform = "";
+      setTimeout(() => player.classList.remove("snap"), 250);
+    }
+  };
+  player.addEventListener("pointerup", end);
+  player.addEventListener("pointercancel", end);
 }
 
 /* ============================================================ offline cache
@@ -1058,7 +1239,7 @@ function renderOfflineChip() {
 
   /* The Greek wording is long; on a phone the icon carries the meaning and the
      full text lives in the tooltip / accessible name. */
-  const compact = window.matchMedia("(max-width: 700px)").matches;
+  const compact = window.matchMedia("(max-width: 700px)").matches && !npIsOpen();
   if (!compact) {
     label.textContent = full;
   } else if (store.ui.offlineCache && offlineUI.state === "saving") {

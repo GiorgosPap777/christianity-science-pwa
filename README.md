@@ -26,6 +26,10 @@ Greek podcast **Χριστιανισμός - Επιστήμη** (Christianity - 
   end of the current part or episode.
 - **Lock screen** — artwork, a scrubber, and play/pause/skip from the OS media
   controls.
+- **Now playing** — on phones and tablets, tap the player's title (or swipe it
+  up) for a full-screen view: large artwork, bigger controls, and the episode's
+  parts as a bar you can tap to jump between. Swipe down, press back or Escape
+  to return to the list.
 - **Greek / English interface** with an ΕΛ⁠/⁠EN toggle. Episode titles come from
   the folder names and are never translated.
 - **Installable (PWA)** — full screen, its own home-screen icon, works offline.

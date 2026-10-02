@@ -111,20 +111,36 @@
 </main>
 
 <footer class="player" id="player" hidden aria-live="off">
+  <div class="np-head">
+    <button type="button" class="icon-btn" id="btn-np-close" data-i18n-title="np.close" data-i18n-aria-label="np.close">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.6 8.6 12 13.2 7.4 8.6 6 10l6 6 6-6z"/></svg>
+    </button>
+    <span class="np-label" data-i18n="np.title"></span>
+    <span class="np-spacer" aria-hidden="true"></span>
+  </div>
+
   <div class="ep-progress" id="ep-progress" data-i18n-aria-label="player.episodeProgress">
     <div class="ep-progress-fill" id="ep-progress-fill"></div>
   </div>
 
   <div class="player-inner">
     <div class="p-meta">
-      <img class="p-art" src="icons/icon-192.png" alt="" width="44" height="44">
+      <img class="p-art" src="icons/icon-512.png" alt="" width="44" height="44">
       <div class="p-text">
         <div class="p-title" id="p-title"></div>
         <div class="p-sub" id="p-sub"></div>
       </div>
+      <button type="button" class="icon-btn subtle np-expand" id="btn-np-open" aria-expanded="false"
+              data-i18n-title="np.open" data-i18n-aria-label="np.open">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8l-6 6 1.4 1.4 4.6-4.6 4.6 4.6L18 14z"/></svg>
+      </button>
     </div>
 
     <div class="p-center">
+      <div class="p-parts">
+        <div class="p-segs" id="p-segs"></div>
+        <div class="p-parts-cap"><span id="np-part"></span><span id="np-left"></span></div>
+      </div>
       <div class="p-controls">
         <button type="button" class="icon-btn" id="btn-prev-ep" data-i18n-title="player.prevEpisode" data-i18n-aria-label="player.prevEpisode">
           <svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm12 0v12l-9-6z"/></svg>

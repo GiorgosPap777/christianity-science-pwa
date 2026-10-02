@@ -15,6 +15,7 @@
   --shadow: 0 1px 2px rgba(0,0,0,.05), 0 8px 24px rgba(0,0,0,.06);
   --radius: 10px;
   --player-h: 148px;
+  --np-top: #dbe5ee;      /* top of the full-screen player; the artwork's blue */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -31,6 +32,7 @@
     --accent-text: #1b1b19;
     --ok: #6cc08b;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
+    --np-top: #15304b;
   }
 }
 
@@ -271,6 +273,7 @@ mark { background: var(--accent-soft); color: inherit; border-radius: 3px; paddi
 }
 .p-sub { color: var(--muted); font-size: .76rem; margin-top: .1rem;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-sub > span + span::before { content: " · "; }
 
 .p-center { display: flex; flex-direction: column; align-items: center; gap: .25rem; }
 .p-controls { display: flex; align-items: center; gap: .15rem; }
@@ -408,6 +411,129 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--faint); }
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
+}
+
+/* ---------- now playing (phones and tablets) ----------
+   The player footer itself, expanded to fill the screen: big artwork, the
+   seek bar above the transport, larger targets, and the episode's parts as a
+   segmented bar. app.js toggles .expanded; nothing here applies on desktop. */
+.np-head, .p-parts, .np-expand { display: none; }
+
+@media (max-width: 860px) {
+  .np-expand { display: grid; flex: none; padding: .25rem; }
+  .np-expand svg { width: 18px; height: 18px; }
+  /* Tap or swipe up on the title to open. */
+  .p-meta { cursor: pointer; touch-action: none; }
+
+  body.np-open { overflow: hidden; }   /* the list behind stays put */
+  body.np-open .notices { bottom: auto; top: calc(env(safe-area-inset-top) + 3.6rem); }
+
+  .player.expanded {
+    inset: 0; display: flex; flex-direction: column;
+    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+    background: linear-gradient(to bottom, var(--np-top), var(--bg) 60%);
+    border-top: 0; box-shadow: none;
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+    overflow-y: auto; overscroll-behavior: contain;
+    animation: np-in .32s cubic-bezier(.2, .8, .2, 1);
+  }
+  .player.expanded.closing { animation: np-out .22s cubic-bezier(.4, 0, 1, 1) forwards; }
+  .player.expanded.snap { transition: transform .22s ease-out; }
+
+  .player.expanded .np-head {
+    display: flex; align-items: center; justify-content: space-between;
+    flex: none; padding: .35rem .5rem; touch-action: none;
+  }
+  .np-head .icon-btn svg { width: 28px; height: 28px; }
+  .np-label {
+    font-size: .72rem; font-weight: 650; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .np-spacer { width: 40px; }            /* balances the close button */
+  .player.expanded .ep-progress { display: none; }   /* the parts bar replaces it */
+
+  .player.expanded .player-inner {
+    flex: 1 0 auto; width: 100%; max-width: 30rem;
+    display: flex; flex-direction: column; justify-content: space-evenly;
+    gap: 1.2rem; padding: .25rem 1.4rem 1.1rem;
+  }
+  .player.expanded .p-meta { flex-direction: column; gap: 1.2rem; cursor: default; }
+  .player.expanded .p-art {
+    display: block; width: min(76vw, 40vh, 340px); height: auto; aspect-ratio: 1;
+    border-radius: 21%; box-shadow: 0 18px 44px rgba(0,0,0,.32);
+  }
+  .player.expanded .p-text { width: 100%; }
+  .player.expanded .p-title {
+    white-space: normal; font-size: 1.24rem; line-height: 1.3; text-wrap: balance;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+  }
+  .player.expanded .p-sub { white-space: normal; font-size: .84rem; margin-top: .4rem; }
+  .player.expanded .p-sub .sub-part,
+  .player.expanded .np-expand { display: none; }
+
+  .player.expanded .p-center { width: 100%; gap: 1.2rem; }
+  .player.expanded .p-parts { display: block; width: 100%; }
+  .p-segs { display: flex; gap: 4px; }
+  .p-seg {
+    flex: 1 1 0; min-width: 0; height: 22px; padding: 9px 0; border: 0;
+    background: none; display: block;
+  }
+  .p-seg::before {
+    content: ""; display: block; height: 4px; border-radius: 2px;
+    background: color-mix(in srgb, var(--text) 14%, transparent);
+  }
+  .p-seg > i {
+    display: block; height: 4px; margin-top: -4px; width: 0;
+    border-radius: 2px; background: var(--accent); opacity: .55;
+  }
+  .p-seg[aria-current] > i { opacity: 1; }
+  .p-parts-cap {
+    display: flex; justify-content: space-between; margin-top: .15rem;
+    color: var(--faint); font-size: .74rem; font-variant-numeric: tabular-nums;
+  }
+
+  .player.expanded .p-seek {
+    order: 1; width: 100%;
+    display: grid; grid-template-columns: 1fr 1fr; row-gap: .1rem;
+  }
+  .player.expanded #seek { grid-column: 1 / -1; grid-row: 1; height: 26px; }
+  .player.expanded .time { font-size: .76rem; min-width: 0; }
+  .player.expanded #t-cur { justify-self: start; }
+  .player.expanded #t-dur { justify-self: end; }
+  .player.expanded #seek::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; }
+  .player.expanded #seek::-moz-range-track { height: 6px; border-radius: 3px; }
+  .player.expanded #seek::-webkit-slider-thumb { width: 16px; height: 16px; margin-top: -5px; }
+  .player.expanded #seek::-moz-range-thumb { width: 16px; height: 16px; }
+
+  .player.expanded .p-controls { order: 2; width: 100%; justify-content: space-between; }
+  .player.expanded #btn-prev-ep,
+  .player.expanded #btn-next-ep { display: grid; }
+  .player.expanded .icon-btn { padding: .5rem; }
+  .player.expanded .p-controls .icon-btn svg { width: 24px; height: 24px; }
+  .player.expanded .icon-btn .skip-icon { width: 28px; height: 28px; }
+  .player.expanded .play-btn {
+    padding: 1.05rem; margin: 0;
+    box-shadow: 0 8px 22px color-mix(in srgb, var(--accent) 38%, transparent);
+  }
+  .player.expanded .play-btn svg { width: 30px; height: 30px; }
+
+  .player.expanded .p-extra { justify-content: center; flex-wrap: wrap; gap: .5rem; }
+  .player.expanded .listen-chip #listened-label { display: inline; }
+  .player.expanded .p-extra .chip { padding: .45rem .85rem; font-size: .8rem; }
+}
+@media (max-width: 360px) {
+  .player.expanded .player-inner { padding-inline: .9rem; }
+  .player.expanded .icon-btn { padding: .35rem; }
+}
+/* Landscape phones: the controls matter more than the picture. */
+@media (max-width: 860px) and (max-height: 540px) {
+  .player.expanded .p-art { display: none; }
+  .player.expanded .player-inner { gap: .8rem; }
+}
+@keyframes np-in  { from { transform: translateY(100%); } }
+@keyframes np-out { to   { transform: translateY(100%); } }
+@media (prefers-reduced-motion: reduce) {
+  .player.expanded { animation: none; }
 }
 
 /* ---------- install card (PWA) ---------- */

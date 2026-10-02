@@ -65,6 +65,11 @@ const I18N = {
     "player.loadError": "Δεν ήταν δυνατή η φόρτωση αυτού του μέρους. Ελέγξτε τη σύνδεση και δοκιμάστε ξανά.",
     "player.notSaved": "Αυτή η εκπομπή δεν είναι αποθηκευμένη στη συσκευή.",
 
+    "np.title": "Τώρα παίζει",
+    "np.open": "Άνοιγμα σε πλήρη οθόνη",
+    "np.close": "Ελαχιστοποίηση",
+    "np.left": "Απομένουν {time}",
+
     "sleep.title": "Χρονοδιακόπτης ύπνου",
     "sleep.off": "Ανενεργός",
     "sleep.min": "Σε {n} λεπτά",
@@ -153,6 +158,11 @@ const I18N = {
     "player.close": "Close",
     "player.loadError": "Couldn’t load this part. Check your connection and try again.",
     "player.notSaved": "This episode isn’t saved on this device.",
+
+    "np.title": "Now playing",
+    "np.open": "Open full screen",
+    "np.close": "Minimise",
+    "np.left": "{time} left",
 
     "sleep.title": "Sleep timer",
     "sleep.off": "Off",
