@@ -33,6 +33,8 @@ INDEX_OUT = os.path.abspath(INDEX_OUT) if INDEX_OUT else None
 
 RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 NO_CACHE_EXT = (".html", ".js", ".css", ".json", ".webmanifest")
+# Clients that hang up mid-transfer -- routine for <audio>, not an error.
+CLIENT_GONE = (ConnectionResetError, BrokenPipeError, ConnectionAbortedError)
 
 
 class ArchiveHandler(SimpleHTTPRequestHandler):
@@ -146,7 +148,7 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
         if self._range is None:
             try:
                 return super().copyfile(source, outputfile)
-            except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+            except CLIENT_GONE:
                 return None
         _, remaining = self._range
         try:
@@ -156,7 +158,7 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
                     break
                 outputfile.write(chunk)
                 remaining -= len(chunk)
-        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+        except CLIENT_GONE:
             pass          # client seeked away or closed the tab
 
     # -- headers ---------------------------------------------------------
@@ -186,17 +188,27 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
         return super().guess_type(low)
 
     # -- quieter logging -------------------------------------------------
-    def handle_error(self, *args):
-        exc = sys.exc_info()[1]
-        if isinstance(exc, (ConnectionResetError, BrokenPipeError, ConnectionAbortedError)):
-            return
-        super().handle_error(*args)
-
     def log_message(self, fmt, *args):
         msg = fmt % args
         if any((" %s " % c) in msg for c in (200, 204, 206, 301, 304)):
             return  # only surface problems
         sys.stderr.write("%s - %s\n" % (self.address_string(), msg))
+
+
+class ArchiveServer(ThreadingHTTPServer):
+    """Drops the traceback for clients that hang up mid-request.
+
+    socketserver reports exceptions escaping a request thread through the
+    *server's* handle_error, not the handler's -- e.g. a phone that opens a
+    connection and drops it while the request line is still being read. That
+    is routine for mobile audio clients, so only real errors get printed."""
+
+    allow_reuse_address = True
+
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], CLIENT_GONE):
+            return
+        super().handle_error(request, client_address)
 
 
 def main():
@@ -215,12 +227,11 @@ def main():
         print(f"Archive root does not exist: {ARCHIVE_ROOT}", file=sys.stderr)
         return 1
 
-    if not os.path.exists(os.path.join(SITE_DIR, "index.json")):
+    if not os.path.exists(INDEX_OUT or os.path.join(SITE_DIR, "index.json")):
         print("index.json is missing -- run:  python3 _site/build_index.py",
               file=sys.stderr)
 
-    ThreadingHTTPServer.allow_reuse_address = True
-    httpd = ThreadingHTTPServer((args.host, args.port), ArchiveHandler)
+    httpd = ArchiveServer((args.host, args.port), ArchiveHandler)
 
     scheme = "http"
     if args.cert:
