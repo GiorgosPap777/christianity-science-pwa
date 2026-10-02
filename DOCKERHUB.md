@@ -81,4 +81,5 @@ want the index to survive restarts (then `REBUILD_INDEX=0` becomes useful).
 
 ## Tags
 
-`latest`, `1.0.3` — `linux/amd64`.
+`latest` follows `main`; versioned tags (`1.0.4`, …) are published for
+releases. `linux/amd64`.
