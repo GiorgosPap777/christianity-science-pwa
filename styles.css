@@ -165,7 +165,13 @@ main { max-width: 62rem; margin: 0 auto; padding: 1rem clamp(.75rem, 3vw, 1.75re
 .season-head {
   width: 100%; display: flex; align-items: center; gap: .7rem;
   padding: .8rem 1rem; background: none; border: 0; text-align: start;
+  position: relative;
 }
+/* Share of the season already listened to, along the header's bottom edge. */
+.season-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 2px; pointer-events: none;
+}
+.season-bar > i { display: block; height: 100%; background: var(--ok); opacity: .75; }
 .season-head:hover { background: var(--panel-2); }
 .caret { width: 14px; height: 14px; fill: var(--faint); flex: none; transition: transform .15s; }
 .season[data-open="true"] .caret { transform: rotate(90deg); }
@@ -214,6 +220,8 @@ main { max-width: 62rem; margin: 0 auto; padding: 1rem clamp(.75rem, 3vw, 1.75re
 }
 .ep-sub .dot { opacity: .5; }
 .ep-resume { color: var(--accent); }
+.ep-saved { display: inline-flex; color: var(--ok); }
+.ep-saved svg { width: 13px; height: 13px; fill: currentColor; }
 
 .ep-progress-sliver {
   height: 3px; background: var(--panel-2); border-radius: 2px;
@@ -251,7 +259,12 @@ mark { background: var(--accent-soft); color: inherit; border-radius: 3px; paddi
   display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center; gap: .9rem;
 }
-.p-meta { min-width: 0; }
+.p-meta { min-width: 0; display: flex; align-items: center; gap: .65rem; }
+.p-art {
+  width: 44px; height: 44px; border-radius: 9px; flex: none;
+  box-shadow: 0 1px 4px rgba(0,0,0,.25);
+}
+.p-text { min-width: 0; }
 .p-title {
   font-weight: 620; font-size: .9rem;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -327,6 +340,12 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--faint); }
 }
 .p-extra .chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .listen-chip { display: inline-flex; align-items: center; gap: .3rem; }
+.listen-chip .listen-icon {
+  width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor;
+  stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round;
+}
+/* Same green as a listened episode row, not the accent "pressed" fill. */
+.chip.listen-chip[aria-pressed="true"] { background: var(--ok); border-color: var(--ok); color: #fff; }
 #speed {
   background: var(--panel); border: 1px solid var(--line);
   border-radius: 999px; padding: .28rem 1.15rem; font-size: .76rem;
@@ -340,11 +359,29 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--faint); }
 }
 .volume { width: 5rem; flex: none; }
 
+/* Sleep timer: a chip showing the moon and what is left, with the native
+   <select> stretched invisibly over it so the OS picker does the choosing. */
+.sleep-chip {
+  position: relative; display: inline-flex; align-items: center; gap: .3rem;
+  cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.sleep-chip .sleep-icon { width: 13px; height: 13px; fill: currentColor; flex: none; }
+.sleep-chip #sleep-label:empty { display: none; }
+.sleep-chip select {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  opacity: 0; cursor: pointer; -webkit-appearance: none; appearance: none;
+}
+.sleep-chip:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sleep-chip[data-active="true"] {
+  color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+}
+
 /* ---------- responsive ---------- */
 @media (max-width: 860px) {
   :root { --player-h: 170px; }
   .player-inner { grid-template-columns: 1fr; gap: .35rem; }
-  .p-meta { text-align: center; }
+  .p-meta { text-align: center; justify-content: center; }
+  .p-art { width: 36px; height: 36px; border-radius: 8px; }
   .p-extra { justify-content: center; }
   .volume { display: none; }
 }
@@ -352,9 +389,18 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--faint); }
   :root { --player-h: 158px; }
   .header-row { align-items: center; }
   .subtitle { display: none; }
-  .toolbar-btns { width: 100%; }
-  .toolbar-btns .chip { flex: 1 1 auto; text-align: center; }
+  /* One scrollable row of chips instead of wrapping onto a second line,
+     which the sticky header would carry down the whole page. */
+  .toolbar-btns {
+    width: 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+    margin: -2px; padding: 2px;               /* room for the focus ring */
+  }
+  .toolbar-btns::-webkit-scrollbar { display: none; }
+  .toolbar-btns .chip { flex: 1 0 auto; text-align: center; }
+  .listen-chip #listened-label { display: none; }
+  .listen-chip { padding-inline: .6rem; }
   #btn-prev-ep, #btn-next-ep { display: none; }
+  .p-art { display: none; }
   .p-seek { width: 100%; }
   .ep-sub { flex-wrap: wrap; }
   .season-years { display: none; }
@@ -429,13 +475,18 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--faint); }
   color: #b3402f; border-color: #b3402f;
 }
 
-.net-banner {
+.notices {
   position: fixed; left: 50%; transform: translateX(-50%);
   bottom: calc(var(--player-h) + 12px); z-index: 60;
+  display: flex; flex-direction: column; align-items: center; gap: .4rem;
+  width: max-content; max-width: calc(100vw - 2rem); pointer-events: none;
+}
+.notice {
   background: var(--accent); color: var(--accent-text);
   padding: .45rem .9rem; border-radius: 999px; font-size: .8rem;
-  box-shadow: var(--shadow); max-width: calc(100vw - 2rem); text-align: center;
+  box-shadow: var(--shadow); text-align: center;
 }
+.notice.toast { background: var(--text); color: var(--bg); border-radius: 12px; }
 
 @media (max-width: 560px) {
   .install-sub { font-size: .78rem; }

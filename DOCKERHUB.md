@@ -62,11 +62,13 @@ want the index to survive restarts (then `REBUILD_INDEX=0` becomes useful).
 - Continuous playback across an episode's parts, then straight into the next
   episode — across season boundaries.
 - Resume where you left off, per-episode listened tracking, "unheard only"
-  filter, accent-insensitive Greek search.
+  filter, accent-insensitive Greek search by title words and dates.
+- Sleep timer, lock-screen controls with artwork.
 - Greek/English interface toggle. Episode titles are never translated.
 - **Installable (PWA)** — full screen, own home-screen icon, works offline.
 - **Offline caching** — the episode you are listening to is kept on the device
-  so playback survives a tunnel. Bounded to the 3 most recent episodes.
+  so playback survives a tunnel. Bounded to the 3 most recent episodes, and
+  paced so a few listeners cannot saturate a home uplink.
 
 ## Two things that will bite you
 

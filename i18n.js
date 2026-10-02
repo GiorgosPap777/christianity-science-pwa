@@ -9,9 +9,10 @@ const I18N = {
     "app.loading": "Φόρτωση αρχείου…",
     "app.loadError": "Δεν ήταν δυνατή η φόρτωση του index.json. Τρέξτε: python3 _site/build_index.py",
 
-    "search.placeholder": "Αναζήτηση εκπομπής…",
+    "search.placeholder": "Αναζήτηση τίτλου ή ημερομηνίας…",
     "search.clear": "Καθαρισμός αναζήτησης",
     "search.results": "{n} αποτελέσματα",
+    "search.results.one": "{n} αποτέλεσμα",
     "search.noResults": "Καμία εκπομπή δεν ταιριάζει με «{q}»",
 
     "filter.unheard": "Μόνο ανήκουστες",
@@ -23,8 +24,11 @@ const I18N = {
 
     "season.label": "{n}ος Κύκλος Εκπομπών",
     "season.episodes": "{n} εκπομπές",
+    "season.episodes.one": "{n} εκπομπή",
     "season.unheard": "{n} ανήκουστες",
+    "season.unheard.one": "{n} ανήκουστη",
     "season.allListened": "όλες ακουσμένες",
+    "season.progress": "{done} από {total} ακουσμένες",
 
     "continue.title": "Συνέχεια ακρόασης",
     "continue.resume": "Συνέχεια",
@@ -34,7 +38,10 @@ const I18N = {
 
     "ep.part": "Μέρος {n}/{total}",
     "ep.parts": "{n} μέρη",
+    "ep.parts.one": "{n} μέρος",
     "ep.duration": "{n} λεπτά",
+    "ep.duration.one": "{n} λεπτό",
+    "ep.saved": "Αποθηκευμένη στη συσκευή",
     "ep.listened": "Ακουσμένη",
     "ep.markListened": "Σήμανση ως ακουσμένη",
     "ep.markUnlistened": "Σήμανση ως ανήκουστη",
@@ -55,6 +62,16 @@ const I18N = {
     "player.episodeProgress": "Πρόοδος εκπομπής",
     "player.empty": "Επιλέξτε μια εκπομπή",
     "player.close": "Κλείσιμο",
+    "player.loadError": "Δεν ήταν δυνατή η φόρτωση αυτού του μέρους. Ελέγξτε τη σύνδεση και δοκιμάστε ξανά.",
+    "player.notSaved": "Αυτή η εκπομπή δεν είναι αποθηκευμένη στη συσκευή.",
+
+    "sleep.title": "Χρονοδιακόπτης ύπνου",
+    "sleep.off": "Ανενεργός",
+    "sleep.min": "Σε {n} λεπτά",
+    "sleep.part": "Στο τέλος του μέρους",
+    "sleep.episode": "Στο τέλος της εκπομπής",
+    "sleep.partShort": "Μέρος",
+    "sleep.episodeShort": "Εκπομπή",
 
     "lang.switch": "Γλώσσα διεπαφής",
 
@@ -83,9 +100,10 @@ const I18N = {
     "app.loading": "Loading archive…",
     "app.loadError": "Could not load index.json. Run: python3 _site/build_index.py",
 
-    "search.placeholder": "Search episodes…",
+    "search.placeholder": "Search titles or dates…",
     "search.clear": "Clear search",
     "search.results": "{n} results",
+    "search.results.one": "{n} result",
     "search.noResults": "No episode matches “{q}”",
 
     "filter.unheard": "Unheard only",
@@ -97,8 +115,10 @@ const I18N = {
 
     "season.label": "Season {n}",
     "season.episodes": "{n} episodes",
+    "season.episodes.one": "{n} episode",
     "season.unheard": "{n} unheard",
     "season.allListened": "all listened",
+    "season.progress": "{done} of {total} listened",
 
     "continue.title": "Continue listening",
     "continue.resume": "Resume",
@@ -108,7 +128,9 @@ const I18N = {
 
     "ep.part": "Part {n}/{total}",
     "ep.parts": "{n} parts",
+    "ep.parts.one": "{n} part",
     "ep.duration": "{n} min",
+    "ep.saved": "Saved on this device",
     "ep.listened": "Listened",
     "ep.markListened": "Mark as listened",
     "ep.markUnlistened": "Mark as unheard",
@@ -129,6 +151,16 @@ const I18N = {
     "player.episodeProgress": "Episode progress",
     "player.empty": "Pick an episode",
     "player.close": "Close",
+    "player.loadError": "Couldn’t load this part. Check your connection and try again.",
+    "player.notSaved": "This episode isn’t saved on this device.",
+
+    "sleep.title": "Sleep timer",
+    "sleep.off": "Off",
+    "sleep.min": "In {n} minutes",
+    "sleep.part": "At the end of this part",
+    "sleep.episode": "At the end of this episode",
+    "sleep.partShort": "Part",
+    "sleep.episodeShort": "Episode",
 
     "lang.switch": "Interface language",
 
@@ -152,9 +184,11 @@ const I18N = {
   },
 };
 
-/* t("ep.part", {n: 2, total: 4}) */
+/* t("ep.part", {n: 2, total: 4}). When {n} is 1 and a "<key>.one" entry
+   exists it is used instead, so counts read "1 result", not "1 results". */
 function t(key, vars) {
   const table = I18N[window.__lang] || I18N.el;
+  if (vars && vars.n === 1 && table[key + ".one"] !== undefined) key += ".one";
   let s = table[key];
   if (s === undefined) s = (I18N.el[key] !== undefined ? I18N.el[key] : key);
   if (vars) {

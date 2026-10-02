@@ -20,11 +20,18 @@ Greek podcast **Χριστιανισμός - Επιστήμη** (Christianity - 
 - **Listened tracking** — auto-marked when the last part finishes, manually
   togglable, with an "unheard only" filter.
 - **Search** — accent-insensitive Greek matching, so `εξελιξη` finds `Εξέλιξη`.
+  Several words match in any order, and dates count too: `εξελιξη 2009`,
+  `μαρτιου 2022` or `march 2022`.
+- **Sleep timer** — stop after 15–60 minutes (with a short fade-out), or at the
+  end of the current part or episode.
+- **Lock screen** — artwork, a scrubber, and play/pause/skip from the OS media
+  controls.
 - **Greek / English interface** with an ΕΛ⁠/⁠EN toggle. Episode titles come from
   the folder names and are never translated.
 - **Installable (PWA)** — full screen, its own home-screen icon, works offline.
 - **Offline caching** — the episode you are listening to is stored on the
-  device, so playback survives a tunnel or a dead spot.
+  device, so playback survives a tunnel or a dead spot. Saved episodes carry a
+  cloud mark in the list.
 - Scrubbing, ±15 s, part/episode skip, playback speed, OS media keys, and a
   mobile-friendly layout.
 
@@ -111,8 +118,15 @@ the part you are on is already being buffered by the audio element, so it is
 fetched last and nothing is downloaded twice. Once the episode is complete,
 part 1 of the next episode is fetched so autoplay does not stall either.
 
+Saving is **paced at 4× the audio bitrate** (~32 KB/s for the usual 64 kbps
+parts) instead of downloading as fast as the link allows. On a ~5 Mbps home
+uplink that keeps 15 simultaneous listeners under budget, and it still
+finishes a whole episode while its first part plays. `PREFETCH_SPEEDUP` in
+`app.js` changes the multiple; `0` means full speed.
+
 Only the **3 most recent episodes** are kept (~150 MB); older ones are evicted
-automatically. The cloud chip in the player shows progress — tap it to turn
+automatically. The lookahead part of the next episode does not count against
+that limit. The cloud chip in the player shows progress — tap it to turn
 caching off and clear what is stored.
 
 ## Stored state
@@ -128,7 +142,7 @@ server-side state, no account, and no network calls beyond your own server.
 | `cs:v1:last` | the "continue listening" target |
 | `cs:v1:recent` | recently played |
 | `cs:v1:ui` | sort order, filters, open seasons, volume, speed, offline caching |
-| `cs:v1:cachedEps` | episodes held in the offline audio cache |
+| `cs:v1:cachedEps` | fully saved episodes in the offline audio cache, newest first |
 
 ## Files
 

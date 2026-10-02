@@ -150,46 +150,77 @@ function applyI18n() {
     t(store.ui.sort === "newest" ? "sort.newest" : "sort.oldest");
   renderOfflineChip();
   renderNetBanner();
+  labelSleepOptions();
+  renderSleep();
   updateExpandLabel();
   updatePlayerText();
 }
 
 /* ------------------------------------------------------------------ state */
 
-const view = { query: "", debounce: 0 };
+/* query: the normalised search text; terms: its words. Every word must match
+   the title or the date, in any order, so "εξελιξη 2009" works. */
+const view = { query: "", terms: [], debounce: 0 };
+
+function setQuery(raw) {
+  view.query = normalize(raw.trim());
+  view.terms = view.query.split(/\s+/).filter(Boolean);
+}
 
 function matches(ep) {
   if (store.ui.unheardOnly && isListened(ep.id)) return false;
-  if (!view.query) return true;
-  return ep._norm.indexOf(view.query) !== -1;
+  for (const w of view.terms) {
+    if (ep._norm.indexOf(w) === -1 && ep._dateNorm.indexOf(w) === -1) return false;
+  }
+  return true;
 }
 
 /* ---------------------------------------------------------------- render */
 
-function highlight(ep) {
+/* Text with every occurrence of every search word wrapped in <mark>. `norm`
+   is normalize(text): same length in code points, so indices line up. */
+function highlight(text, norm) {
   const frag = document.createDocumentFragment();
-  if (!view.query) {
-    frag.appendChild(document.createTextNode(ep.title));
+  const hits = [];
+  for (const w of view.terms) {
+    for (let i = norm.indexOf(w); i !== -1; i = norm.indexOf(w, i + 1)) {
+      hits.push([i, i + w.length]);
+    }
+  }
+  if (hits.length === 0) {
+    frag.appendChild(document.createTextNode(text));
     return frag;
   }
-  const i = ep._norm.indexOf(view.query);
-  if (i === -1) {
-    frag.appendChild(document.createTextNode(ep.title));
-    return frag;
+  hits.sort((a, b) => a[0] - b[0]);
+  const cps = Array.from(text);
+  let pos = 0;
+  for (const [a, b] of hits) {
+    if (b <= pos) continue;                        // inside an earlier mark
+    const from = Math.max(a, pos);
+    if (from > pos) frag.appendChild(document.createTextNode(cps.slice(pos, from).join("")));
+    const mk = document.createElement("mark");
+    mk.textContent = cps.slice(from, b).join("");
+    frag.appendChild(mk);
+    pos = b;
   }
-  const cps = ep._cps;
-  const j = i + view.query.length;
-  frag.appendChild(document.createTextNode(cps.slice(0, i).join("")));
-  const mk = document.createElement("mark");
-  mk.textContent = cps.slice(i, j).join("");
-  frag.appendChild(mk);
-  frag.appendChild(document.createTextNode(cps.slice(j).join("")));
+  if (pos < cps.length) frag.appendChild(document.createTextNode(cps.slice(pos).join("")));
   return frag;
 }
 
 const SVG_PLAY  = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
+const SVG_PAUSE = '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>';
 const SVG_CHECK = '<svg viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6.5" fill="none"/></svg>';
 const SVG_CARET = '<svg class="caret" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7z"/></svg>';
+const SVG_CLOUD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 19a4.5 4.5 0 01-.4-8.98 6 6 0 0111.64-1.7A4.25 4.25 0 0117.75 19z"/></svg>';
+
+/* The row's play button turns into pause while that episode is playing. */
+function setRowButton(btn, ep) {
+  const playing = !!(cur && cur.ep === ep && !audio.paused);
+  btn.innerHTML = playing ? SVG_PAUSE : SVG_PLAY;
+  const lbl = t(playing ? "player.pause" : "ep.play");
+  btn.title = lbl;
+  btn.setAttribute("aria-label", lbl + ": " + ep.title);
+}
 
 function episodeRow(ep) {
   const row = document.createElement("div");
@@ -201,9 +232,7 @@ function episodeRow(ep) {
   const play = document.createElement("button");
   play.type = "button";
   play.className = "ep-play";
-  play.innerHTML = SVG_PLAY;
-  play.title = t("ep.play");
-  play.setAttribute("aria-label", t("ep.play") + ": " + ep.title);
+  setRowButton(play, ep);
   play.addEventListener("click", () => {
     const p = store.progress[ep.id];
     if (cur && cur.ep === ep) togglePlay();
@@ -216,14 +245,15 @@ function episodeRow(ep) {
 
   const title = document.createElement("span");
   title.className = "ep-title";
-  title.appendChild(highlight(ep));
+  title.appendChild(highlight(ep.title, ep._norm));
   main.appendChild(title);
 
   const sub = document.createElement("div");
   sub.className = "ep-sub";
   const date = document.createElement("span");
   date.className = "ep-date";
-  date.textContent = epDate(ep);
+  const dl = epDate(ep);
+  date.appendChild(highlight(dl, normalize(dl)));
   sub.appendChild(date);
 
   sub.insertAdjacentHTML("beforeend", '<span class="dot">·</span>');
@@ -245,6 +275,16 @@ function episodeRow(ep) {
     res.className = "ep-resume";
     res.textContent = t("ep.part", { n: prog.part + 1, total: ep.parts.length });
     sub.appendChild(res);
+  }
+
+  if (store.cachedEps.indexOf(ep.id) !== -1) {
+    const saved = document.createElement("span");
+    saved.className = "ep-saved";
+    saved.innerHTML = SVG_CLOUD;
+    saved.title = t("ep.saved");
+    saved.setAttribute("role", "img");
+    saved.setAttribute("aria-label", t("ep.saved"));
+    sub.appendChild(saved);
   }
   main.appendChild(sub);
 
@@ -331,6 +371,18 @@ function renderSeasons() {
       meta.appendChild(pill);
     }
     head.appendChild(meta);
+
+    const heard = s.episodes.length - unheard;
+    if (heard > 0) {
+      const bar = document.createElement("span");
+      bar.className = "season-bar";
+      bar.setAttribute("role", "img");
+      bar.setAttribute("aria-label",
+        t("season.progress", { done: heard, total: s.episodes.length }));
+      bar.innerHTML = '<i style="width:' +
+        ((heard / s.episodes.length) * 100).toFixed(1) + '%"></i>';
+      head.appendChild(bar);
+    }
 
     head.addEventListener("click", () => {
       if (view.query) return;                      // stays open while searching
@@ -509,16 +561,92 @@ function goEpisode(delta) {
 function onEnded() {
   if (!cur) return;
   const ep = cur.ep;
-  if (cur.part < ep.parts.length - 1) {
-    loadEpisode(ep, cur.part + 1, 0, true);       // next part, seamless
+  const lastPart = cur.part >= ep.parts.length - 1;
+  /* A sleep timer set to "end of part/episode" still advances the position,
+     just paused, so the next tap resumes where listening should continue. */
+  const stop = sleep.mode === "part" || (sleep.mode === "episode" && lastPart);
+  if (stop) clearSleep();
+
+  if (!lastPart) {
+    loadEpisode(ep, cur.part + 1, 0, !stop);      // next part, seamless
     return;
   }
   setListened(ep.id, true);                       // all parts played through
   delete store.progress[ep.id];
   saveProgress();
   const nx = neighbour(ep, 1);
-  if (nx) loadEpisode(nx, 0, 0, true);
+  if (nx) loadEpisode(nx, 0, 0, !stop);
   else { updatePlayerText(); render(); }
+}
+
+/* ------------------------------------------------------------ sleep timer
+
+   "15".."60" stop after that many minutes, fading out over the last few
+   seconds; "part" / "episode" stop when that ends (see onEnded). Not
+   persisted: a timer from last night should not fire tomorrow. */
+
+const SLEEP_FADE_MS = 10000;
+const sleep = { mode: "off", until: 0, tick: 0 };
+
+function setSleep(value) {
+  clearSleep();
+  if (value === "part" || value === "episode") {
+    sleep.mode = value;
+  } else if (parseInt(value, 10) > 0) {
+    sleep.mode = "time";
+    sleep.until = Date.now() + parseInt(value, 10) * 60000;
+    sleep.tick = setInterval(checkSleep, 1000);
+  }
+  renderSleep();
+}
+
+function clearSleep() {
+  clearInterval(sleep.tick);
+  if (sleep.mode === "time") audio.volume = store.ui.volume;   // undo any fade
+  sleep.mode = "off";
+  sleep.until = 0;
+  renderSleep();
+}
+
+function checkSleep() {
+  if (sleep.mode !== "time") return;
+  const left = sleep.until - Date.now();
+  if (left <= 0) {
+    audio.pause();
+    clearSleep();
+    return;
+  }
+  if (left < SLEEP_FADE_MS) audio.volume = store.ui.volume * (left / SLEEP_FADE_MS);
+  renderSleep();
+}
+
+function renderSleep() {
+  const chip = $("#sleep-chip");
+  if (!chip) return;
+  const label = $("#sleep-label");
+  const sel = $("#sleep");
+  chip.dataset.active = String(sleep.mode !== "off");
+  if (sleep.mode === "time") {
+    label.textContent = fmtTime(Math.max(0, (sleep.until - Date.now()) / 1000));
+  } else if (sleep.mode === "part") {
+    label.textContent = t("sleep.partShort");
+  } else if (sleep.mode === "episode") {
+    label.textContent = t("sleep.episodeShort");
+  } else {
+    label.textContent = "";
+    sel.value = "0";
+  }
+}
+
+/* Separate from renderSleep, which runs every second: rewriting the options
+   while the native picker is open would make it flicker. */
+function labelSleepOptions() {
+  Array.prototype.forEach.call($("#sleep").options, (o) => {
+    o.textContent = o.value === "0" ? t("sleep.off")
+      : o.value === "part" ? t("sleep.part")
+      : o.value === "episode" ? t("sleep.episode")
+      : t("sleep.min", { n: parseInt(o.value, 10) });
+  });
 }
 
 function persistPosition(force) {
@@ -541,7 +669,7 @@ function updatePlayerText() {
   if (!cur) {
     title.textContent = t("player.empty");
     sub.textContent = "";
-    $("#btn-listened").textContent = t("ep.markListened");
+    $("#listened-label").textContent = t("ep.markListened");
     return;
   }
   const ep = cur.ep;
@@ -552,9 +680,14 @@ function updatePlayerText() {
     epDate(ep),
   ].join(" · ");
 
+  /* On a phone only the check icon shows, so the label also goes into the
+     accessible name and tooltip. */
   const on = isListened(ep.id);
   const chip = $("#btn-listened");
-  chip.textContent = on ? t("ep.listened") : t("ep.markListened");
+  const heard = on ? t("ep.listened") : t("ep.markListened");
+  $("#listened-label").textContent = heard;
+  chip.title = heard;
+  chip.setAttribute("aria-label", heard);
   chip.setAttribute("aria-pressed", String(on));
 
   $("#btn-prev-part").disabled = cur.part === 0;
@@ -598,6 +731,11 @@ function updateTimes() {
   }
 }
 
+const ARTWORK = [
+  { src: "icons/icon-192.png", sizes: "192x192", type: "image/png" },
+  { src: "icons/icon-512.png", sizes: "512x512", type: "image/png" },
+];
+
 function updateMediaSession() {
   if (!("mediaSession" in navigator) || !cur) return;
   try {
@@ -605,6 +743,22 @@ function updateMediaSession() {
       title: cur.ep.title,
       artist: t("ep.part", { n: cur.part + 1, total: cur.ep.parts.length }),
       album: seasonLabel(SEASONS[cur.ep.season - 1]),
+      artwork: ARTWORK,
+    });
+  } catch (e) {}
+}
+
+/* Lets the lock screen / notification draw a scrubber for the current part. */
+function updatePositionState() {
+  const ms = navigator.mediaSession;
+  if (!ms) return;
+  ms.playbackState = audio.paused ? "paused" : "playing";
+  if (!ms.setPositionState || !isFinite(audio.duration) || audio.duration <= 0) return;
+  try {
+    ms.setPositionState({
+      duration: audio.duration,
+      position: Math.min(audio.currentTime || 0, audio.duration),
+      playbackRate: audio.playbackRate || 1,
     });
   } catch (e) {}
 }
@@ -631,12 +785,12 @@ function wire() {
     clearTimeout(view.debounce);
     $("#search-clear").hidden = !search.value;
     view.debounce = setTimeout(() => {
-      view.query = normalize(search.value.trim());
+      setQuery(search.value);
       renderSeasons();
     }, 120);
   });
   $("#search-clear").addEventListener("click", () => {
-    search.value = ""; view.query = "";
+    search.value = ""; setQuery("");
     $("#search-clear").hidden = true;
     renderSeasons();
     search.focus();
@@ -744,24 +898,41 @@ function wire() {
     pendingSeek = 0;
     audio.playbackRate = store.ui.speed;
     updateTimes();
+    updatePositionState();
   });
   audio.addEventListener("timeupdate", () => {
     updateTimes();
     persistPosition(false);
+    checkSleep();     // timeupdate keeps firing in a background tab; intervals may not
   });
-  audio.addEventListener("play", () => { updatePlayerText(); markPlayingRow(); });
-  audio.addEventListener("pause", () => { updatePlayerText(); persistPosition(true); });
+  audio.addEventListener("play", () => {
+    updatePlayerText(); markPlayingRow(); updatePositionState();
+  });
+  audio.addEventListener("pause", () => {
+    updatePlayerText(); markPlayingRow(); updatePositionState(); persistPosition(true);
+  });
+  audio.addEventListener("seeked", updatePositionState);
+  audio.addEventListener("ratechange", updatePositionState);
   audio.addEventListener("ended", onEnded);
   audio.addEventListener("error", () => {
-    if (audio.src) console.error("Audio failed to load:", audio.src);
+    if (!audio.src || !cur) return;
+    console.error("Audio failed to load:", audio.src);
+    const saved = store.cachedEps.indexOf(cur.ep.id) !== -1;
+    showToast(t(!navigator.onLine && !saved ? "player.notSaved" : "player.loadError"));
+    updatePlayerText();
+    markPlayingRow();
     renderNetBanner();
   });
+
+  /* sleep timer */
+  $("#sleep").addEventListener("change", (e) => setSleep(e.currentTarget.value));
 
   /* keyboard */
   document.addEventListener("keydown", (e) => {
     const tag = (e.target.tagName || "").toLowerCase();
     if (tag === "input" || tag === "select" || tag === "textarea") return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.code === "Space" && keyboardFocusedButton(e.target)) return;  // let it press
     if (e.code === "Space") { e.preventDefault(); togglePlay(); }
     else if (e.key === "ArrowLeft") {
       e.preventDefault();
@@ -791,25 +962,45 @@ function wire() {
   window.addEventListener("resize", renderOfflineChip);
   syncPlayerHeight();
 
-  /* OS media keys */
+  /* OS media keys and lock screen. Play and pause are explicit rather than a
+     toggle, so a stale lock-screen button cannot invert the state. */
   if ("mediaSession" in navigator) {
     const ms = navigator.mediaSession;
     const set = (a, fn) => { try { ms.setActionHandler(a, fn); } catch (e) {} };
-    set("play", togglePlay);
-    set("pause", togglePlay);
+    set("play", () => { if (cur && audio.paused) togglePlay(); });
+    set("pause", () => { if (cur && !audio.paused) togglePlay(); });
     set("previoustrack", () => goPart(-1));
     set("nexttrack", () => goPart(1));
-    set("seekbackward", () => skip(-15));
-    set("seekforward", () => skip(15));
+    set("seekbackward", (d) => skip(-((d && d.seekOffset) || 15)));
+    set("seekforward", (d) => skip((d && d.seekOffset) || 15));
+    set("seekto", (d) => {
+      if (!cur || !d || !isFinite(d.seekTime) || !isFinite(audio.duration)) return;
+      audio.currentTime = Math.max(0, Math.min(audio.duration, d.seekTime));
+      persistPosition(true);
+    });
   }
 }
 
 function markPlayingRow() {
-  $$(".ep.playing").forEach((r) => r.classList.remove("playing"));
+  $$(".ep.playing").forEach((r) => {
+    r.classList.remove("playing");
+    setRowButton(r.querySelector(".ep-play"), BY_ID[r.dataset.id]);
+  });
   if (!cur) return;
   const row = document.querySelector('.ep[data-id="' + cssEscape(cur.ep.id) + '"]');
-  if (row) row.classList.add("playing");
+  if (row) {
+    row.classList.add("playing");
+    setRowButton(row.querySelector(".ep-play"), cur.ep);
+  }
 }
+/* Space on a button reached with Tab should press it. After a mouse click the
+   button keeps focus but not :focus-visible, so Space still plays/pauses. */
+function keyboardFocusedButton(el) {
+  const btn = el.closest && el.closest("button, a[href], [role='button']");
+  if (!btn) return false;
+  try { return btn.matches(":focus-visible"); } catch (e) { return true; }
+}
+
 function cssEscape(s) {
   return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/["\\]/g, "\\$&");
 }
@@ -822,6 +1013,13 @@ function cssEscape(s) {
 
 const AUDIO_CACHE = "cs-audio-v1";
 const MAX_CACHED_EPISODES = 3;          // ~3 x 50 MB
+
+/* Saving is paced at this multiple of the audio's own bitrate rather than
+   pulling ~50 MB per episode as fast as the link allows. The server sits on a
+   ~5 Mbps home uplink: 15 listeners x 4 x 64 kbps is ~3.8 Mbps, so everyone's
+   live stream and seeks stay responsive. 4x still finishes a whole episode
+   while its first part plays. Set to 0 to download at full speed. */
+const PREFETCH_SPEEDUP = 4;
 
 let prefetchCtl = null;
 let prefetchedFor = null;
@@ -881,25 +1079,48 @@ function schedulePrefetch() {
   prefetchEpisode(cur.ep, cur.part).catch(() => {});
 }
 
-/* Download one part into the cache, reporting 0..1 progress. */
-async function cachePart(cache, url, signal, onProgress) {
+/* Bytes per second to save a part at; 0 = unthrottled. */
+function partRate(part) {
+  if (!PREFETCH_SPEEDUP || !part.dur || !part.bytes) return 0;
+  return (part.bytes / part.dur) * PREFETCH_SPEEDUP;
+}
+
+/* Resolves after `ms`, or straight away once `signal` aborts. */
+function delay(ms, signal) {
+  return new Promise((resolve) => {
+    const id = setTimeout(resolve, ms);
+    if (signal) signal.addEventListener("abort", () => { clearTimeout(id); resolve(); },
+      { once: true });
+  });
+}
+
+/* Download one part into the cache, reporting 0..1 progress, at no more than
+   `rate` bytes/s. Not reading the body is what slows the transfer: TCP flow
+   control pushes the back-pressure all the way to the server. */
+async function cachePart(cache, part, signal, onProgress, rate) {
+  const url = part.url;
   const res = await fetch(url, { signal: signal });
   if (!res.ok) throw new Error("HTTP " + res.status);
 
-  const total = parseInt(res.headers.get("Content-Length") || "0", 10);
-  if (!res.body || !total || !onProgress) {
+  const total = parseInt(res.headers.get("Content-Length") || "0", 10) || part.bytes || 0;
+  if (!res.body || (!onProgress && !rate)) {
     await cache.put(url, res);
     return;
   }
   const reader = res.body.getReader();
   const chunks = [];
+  const started = performance.now();
   let got = 0;
   for (;;) {
     const step = await reader.read();
     if (step.done) break;
     chunks.push(step.value);
     got += step.value.length;
-    onProgress(Math.min(1, got / total));
+    if (onProgress && total) onProgress(Math.min(1, got / total));
+    if (rate) {
+      const ahead = (got / rate) * 1000 - (performance.now() - started);
+      if (ahead > 50) await delay(ahead, signal);
+    }
   }
   const blob = new Blob(chunks, { type: "audio/mpeg" });
   await cache.put(url, new Response(blob, {
@@ -945,9 +1166,9 @@ async function prefetchEpisode(ep, fromPart) {
       continue;
     }
     try {
-      await cachePart(cache, part.url, ctl.signal, (frac) => {
+      await cachePart(cache, part, ctl.signal, (frac) => {
         setOffline("saving", Math.round(((done + frac) / total) * 100));
-      });
+      }, partRate(part));
       done++;
       setOffline("saving", Math.round((done / total) * 100));
     } catch (err) {
@@ -960,42 +1181,59 @@ async function prefetchEpisode(ep, fromPart) {
 
   noteCached(ep.id);
   setOffline("ready", 100);
+  renderSeasons();                                // show the "saved" mark
 
-  /* One part of the next episode too, so autoplay does not stall either. */
+  /* One part of the next episode too, so autoplay does not stall either. It
+     is deliberately not recorded in cachedEps: that list holds whole episodes
+     only, and a one-part lookahead must not push one of those out. */
   const nx = neighbour(ep, 1);
   if (nx && !ctl.signal.aborted) {
     try {
       if (!(await cache.match(pathOf(nx.parts[0].url)))) {
-        await cachePart(cache, nx.parts[0].url, ctl.signal, null);
+        await cachePart(cache, nx.parts[0], ctl.signal, null, partRate(nx.parts[0]));
       }
-      noteCached(nx.id);
     } catch (e) { /* best effort */ }
   }
   pruneAudioCache().catch(() => {});
 }
 
+/* Records a fully saved episode, most recent first. */
 function noteCached(id) {
-  store.cachedEps = [id].concat(store.cachedEps.filter((x) => x !== id));
+  store.cachedEps = [id].concat(store.cachedEps.filter((x) => x !== id))
+    .slice(0, MAX_CACHED_EPISODES);
   saveCached();
 }
 
 /* Keep only the most recent few episodes; the archive is 20 GB and the device
-   is not. */
+   is not. Also reconciles cachedEps with what is really stored, since the
+   browser may evict the cache on its own. */
 async function pruneAudioCache() {
   if (!cacheSupported()) return;
   const cache = await caches.open(AUDIO_CACHE);
-  const keepIds = store.cachedEps.slice(0, MAX_CACHED_EPISODES);
-  const keep = new Set();
-  keepIds.forEach((id) => {
-    const ep = BY_ID[id];
-    if (ep) ep.parts.forEach((p) => keep.add(pathOf(p.url)));
-  });
   const keys = await cache.keys();
+  const have = new Set(keys.map((req) => new URL(req.url).pathname));
+
+  const keepIds = store.cachedEps.filter((id) => BY_ID[id] &&
+    BY_ID[id].parts.every((p) => have.has(pathOf(p.url)))).slice(0, MAX_CACHED_EPISODES);
+
+  const keep = new Set();
+  const keepEp = (ep) => ep.parts.forEach((p) => keep.add(pathOf(p.url)));
+  keepIds.forEach((id) => keepEp(BY_ID[id]));
+  /* ...plus the episode playing now (it may still be downloading) and the
+     first part of the one autoplay moves on to. */
+  if (cur) {
+    keepEp(cur.ep);
+    const nx = neighbour(cur.ep, 1);
+    if (nx) keep.add(pathOf(nx.parts[0].url));
+  }
   for (const req of keys) {
     if (!keep.has(new URL(req.url).pathname)) await cache.delete(req);
   }
+
+  const changed = keepIds.join("\n") !== store.cachedEps.join("\n");
   store.cachedEps = keepIds;
   saveCached();
+  if (changed) renderSeasons();
 }
 
 async function clearAudioCache() {
@@ -1006,9 +1244,24 @@ async function clearAudioCache() {
   saveCached();
   prefetchedFor = null;
   setOffline("idle");
+  renderSeasons();
 }
 
 /* ================================================================ network */
+
+/* The offline banner and transient messages stack in one spot above the
+   player, so they never overlap each other. */
+function noticeHost() {
+  let host = document.getElementById("notices");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "notices";
+    host.className = "notices";
+    host.setAttribute("aria-live", "polite");
+    document.body.appendChild(host);
+  }
+  return host;
+}
 
 function renderNetBanner() {
   let el = document.getElementById("net-banner");
@@ -1016,10 +1269,24 @@ function renderNetBanner() {
   if (!el) {
     el = document.createElement("div");
     el.id = "net-banner";
-    el.className = "net-banner";
-    document.body.appendChild(el);
+    el.className = "notice";
+    noticeHost().prepend(el);
   }
   el.textContent = t("net.offline");
+}
+
+let toastTimer = 0;
+function showToast(msg) {
+  let el = document.getElementById("toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "toast";
+    el.className = "notice toast";
+    noticeHost().appendChild(el);
+  }
+  el.textContent = msg;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.remove(), 6000);
 }
 
 /* ================================================================ install */
@@ -1050,13 +1317,17 @@ function setupInstall() {
   const card = $("#install-card");
   if (!card) return;
 
-  const show = (mode, note) => {
+  /* The note is set by key, so applyI18n re-translates it on a language switch. */
+  const show = (mode, noteKey) => {
     card.hidden = false;
     $("#install-actions").hidden = mode !== "prompt";
     $("#install-ios").hidden = mode !== "ios";
     const n = $("#install-note");
-    n.hidden = !note;
-    if (note) n.textContent = note;
+    n.hidden = !noteKey;
+    if (noteKey) {
+      n.dataset.i18n = noteKey;
+      n.textContent = t(noteKey);
+    }
   };
 
   /* appinstalled can fire even if the card was never shown. */
@@ -1072,12 +1343,12 @@ function setupInstall() {
        Share -> Add to Home Screen route instead. */
     show("ios");
   } else if (!window.isSecureContext) {
-    show(null, t("install.https"));
+    show(null, "install.https");
   } else {
     /* Chrome/Edge fire beforeinstallprompt; if nothing arrives, fall back to
        telling the user where the menu item is. */
     setTimeout(() => {
-      if (!deferredPrompt && card.hidden) show(null, t("install.manual"));
+      if (!deferredPrompt && card.hidden) show(null, "install.manual");
     }, 2000);
   }
 
@@ -1138,6 +1409,7 @@ async function boot() {
     for (const ep of s.episodes) {
       ep._cps = Array.from(ep.title);
       ep._norm = ep._cps.map(normCP).join("");
+      ep._dateNorm = normalize([ep.dateLabel, ep.dateLabelEn, ep.date].join(" "));
       ep._i = FLAT.length;
       FLAT.push(ep);
       BY_ID[ep.id] = ep;
