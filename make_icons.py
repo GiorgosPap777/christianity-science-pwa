@@ -1,18 +1,31 @@
 #!/usr/bin/env python3
 """Generate the PWA icon set from the app artwork.
 
-    python3 _site/make_icons.py
+    python3 _site/make_icons.py [out_dir]
 
-The source (icon-source.jpg) is a phone home-screen mockup; only the rounded
-square icon panel is kept, so none of the mockup background survives. ffmpeg
-does the crop and the high-quality downscale (it is already a project
-dependency for ffprobe); the PNGs are encoded here with zlib, so no imaging
-library is needed. Writes icons/ next to this script.
+The source (icon-source.jpg) is a phone home-screen mockup. Only the rounded
+square icon panel is used, and only its emblem: the cross, helix and book. The
+lettering under it is unreadable at icon size and duplicates the app name, so
+it is painted out:
 
-Re-run only if you change the artwork or the crop.
+  1. The panel's background is a smooth gradient. It is fitted with a low-order
+     polynomial, sampled only where there is no emblem, lettering or rim.
+  2. Each icon is a square window centred on the emblem. Original pixels are
+     kept above the lettering and fade into the fitted background (plus a
+     little grain, to match the JPEG) everywhere else, so the window can extend
+     past the panel's edges and over the old lettering.
+
+ffmpeg does the crop and the high-quality downscale (it is already a project
+dependency for ffprobe). Everything else, including the PNG encoding, is
+plain Python, so no imaging library is needed. Writes icons/ next to this
+script by default.
+
+Re-run only if you change the artwork or the layout below. It takes a few
+seconds per icon.
 """
 
 import os
+import random
 import struct
 import subprocess
 import sys
@@ -25,55 +38,183 @@ OUT = os.path.join(HERE, "icons")
 # The icon panel inside the 1024x1024 mockup: width, height, x, y.
 # Measured from the panel's bright rim, not eyeballed.
 CROP = (706, 706, 162, 182)
+P = CROP[0]
 
-# Flat colour behind the artwork on full-bleed icons, sampled from the panel.
-PANEL_BG = (0x10, 0x42, 0x6E)
+# In panel pixels, measured from a brightness profile of the rows and columns.
+EMBLEM = (179, 54, 528, 516)          # x0, y0, x1, y1: cross top to book glow
+TEXT_ROWS = [(538, 600), (606, 661)]  # the two lines of lettering
+CX = 353.0                            # emblem's horizontal centre (= panel's)
+CY = (EMBLEM[1] + EMBLEM[3]) / 2.0    # and vertical centre
+
+# Original pixels are kept inside this rounded rectangle and fade to the
+# fitted background across FEATHER px. Its bottom edge sits in the clean band
+# between the book's glow (row 516) and the lettering (row 543).
+KEEP = (22.0, 22.0, 684.0, 530.0)
+KEEP_R = 160.0
+FEATHER = 10.0
+# A longer fade along the top, where the glow above the cross would otherwise
+# stop at a visible line. Ends well above the cross (row 54).
+TOP_FADE = (18.0, 42.0)
+
+GRAIN = 1.6                           # +/- levels of noise on the fitted areas
+
+# Emblem height as a share of the icon. "any" icons get a tight crop; the
+# maskable one leaves room for the circle Android cuts it to (80% safe zone).
+FILL_ANY = 0.76
+FILL_MASKABLE = 0.58
 
 CORNER_N = 5.0   # superellipse exponent: |x/r|^n + |y/r|^n <= 1, iOS-ish
 SS = 4           # vertical supersamples per row, for antialiased corners
 
 
-def artwork(size):
-    """Crop the panel out of the mockup and scale it to size; raw rgb24."""
+def ffmpeg(args, data=None):
+    try:
+        res = subprocess.run(["ffmpeg", "-v", "error", "-y"] + args,
+                             input=data, capture_output=True)
+    except FileNotFoundError:
+        sys.exit("ffmpeg not found; install it first")
+    if res.returncode != 0:
+        sys.exit("ffmpeg failed: " + res.stderr.decode(errors="replace"))
+    return res.stdout
+
+
+def panel():
+    """The icon panel at full resolution, raw rgb24."""
     if not os.path.exists(SRC):
         sys.exit(f"missing {SRC}")
     w, h, x, y = CROP
-    out = subprocess.run(
-        ["ffmpeg", "-v", "error", "-y", "-i", SRC,
-         "-vf", f"crop={w}:{h}:{x}:{y},scale={size}:{size}:flags=lanczos",
-         "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
-        capture_output=True).stdout
-    if len(out) != size * size * 3:
-        sys.exit("ffmpeg failed; is it installed?")
-    return bytearray(out)
+    out = ffmpeg(["-i", SRC, "-vf", f"crop={w}:{h}:{x}:{y}",
+                  "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+    if len(out) != w * h * 3:
+        sys.exit("ffmpeg returned an unexpected crop")
+    return out
 
 
-def flatten(size, scale):
-    """Artwork at `scale` of the canvas, rounded, composited on the panel colour.
+def scale(rgb, src, dst):
+    """Lanczos downscale of a square rgb24 image."""
+    return bytearray(ffmpeg(
+        ["-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{src}x{src}", "-i", "-",
+         "-vf", f"scale={dst}:{dst}:flags=lanczos",
+         "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], bytes(rgb)))
 
-    Used for the icons that must stay opaque. Rounding before compositing keeps
-    the mockup's neighbouring app icons from surviving in the corners; the
-    inset leaves a safe zone for the circular mask Android applies.
-    """
-    inner = max(1, int(round(size * scale)))
-    art = artwork(inner)
-    mask = squircle_alpha(inner)
-    off = (size - inner) // 2
-    canvas = bytearray(PANEL_BG * (size * size))
-    for row in range(inner):
-        for col in range(inner):
-            a = mask[row * inner + col]
-            if a == 0:
+
+# ---------------------------------------------------------------- background
+
+def terms(x, y):
+    """Polynomial basis, symmetric about the panel's vertical axis. Clamped so
+    the window can reach past the panel without the fit running away."""
+    u = max(-1.0, min(1.0, (x - CX) / CX))
+    v = max(0.0, min(1.0, y / P))
+    u2 = u * u
+    v2 = v * v
+    return (1.0, v, v2, v2 * v, v2 * v2,
+            u2, u2 * v, u2 * v2, u2 * v2 * v,
+            u2 * u2, u2 * u2 * v, u2 * u2 * u2)
+
+
+def in_rounded(x, y, box, r):
+    x0, y0, x1, y1 = box
+    if x < x0 or x > x1 or y < y0 or y > y1:
+        return False
+    dx = max(x0 + r - x, 0.0, x - (x1 - r))
+    dy = max(y0 + r - y, 0.0, y - (y1 - r))
+    return dx * dx + dy * dy <= r * r
+
+
+def is_background(x, y):
+    if not in_rounded(x, y, (22.0, 22.0, 684.0, 690.0), KEEP_R):
+        return False                                   # rim and corners
+    if 150 <= x <= 560 and 40 <= y <= 530:
+        return False                                   # emblem and its glow
+    return not any(a <= y <= b for a, b in TEXT_ROWS)  # lettering
+
+
+def solve(a, b):
+    """Gaussian elimination with partial pivoting; a is n x n, b length n."""
+    n = len(b)
+    m = [row[:] + [b[i]] for i, row in enumerate(a)]
+    for c in range(n):
+        p = max(range(c, n), key=lambda r: abs(m[r][c]))
+        m[c], m[p] = m[p], m[c]
+        for r in range(c + 1, n):
+            f = m[r][c] / m[c][c]
+            for k in range(c, n + 1):
+                m[r][k] -= f * m[c][k]
+    x = [0.0] * n
+    for r in range(n - 1, -1, -1):
+        x[r] = (m[r][n] - sum(m[r][k] * x[k] for k in range(r + 1, n))) / m[r][r]
+    return x
+
+
+def fit_background(src):
+    """Least-squares fit of the background, one coefficient set per channel."""
+    n = len(terms(0, 0))
+    ata = [[0.0] * n for _ in range(n)]
+    atb = [[0.0] * n for _ in range(3)]
+    count = 0
+    for y in range(0, P, 3):
+        for x in range(0, P, 3):
+            if not is_background(x + 0.5, y + 0.5):
                 continue
-            s = (row * inner + col) * 3
-            d = ((row + off) * size + col + off) * 3
-            if a == 255:
-                canvas[d:d + 3] = art[s:s + 3]
-            else:
+            t = terms(x + 0.5, y + 0.5)
+            i = (y * P + x) * 3
+            for r in range(n):
+                tr = t[r]
+                row = ata[r]
+                for c in range(n):
+                    row[c] += tr * t[c]
                 for k in range(3):
-                    canvas[d + k] = (art[s + k] * a + canvas[d + k] * (255 - a)) // 255
-    return canvas
+                    atb[k][r] += tr * src[i + k]
+            count += 1
+    coef = [solve(ata, atb[k]) for k in range(3)]
+    return coef, count
 
+
+# ----------------------------------------------------------------- composite
+
+def keep_alpha(x, y):
+    """1 inside KEEP, 0 outside, linear across FEATHER px at its edge."""
+    x0, y0, x1, y1 = KEEP
+    r = KEEP_R
+    dx = max(x0 + r - x, 0.0, x - (x1 - r))
+    dy = max(y0 + r - y, 0.0, y - (y1 - r))
+    if dx > 0 and dy > 0:
+        d = (dx * dx + dy * dy) ** 0.5 - r     # distance outside the corner arc
+    else:
+        d = max(x0 - x, x - x1, y0 - y, y - y1)
+    a = max(0.0, min(1.0, 0.5 - d / FEATHER))
+    return min(a, max(0.0, min(1.0, (y - TOP_FADE[0]) / (TOP_FADE[1] - TOP_FADE[0]))))
+
+
+def window(src, coef, fill):
+    """A square of panel pixels centred on the emblem, sized so the emblem is
+    `fill` of its height; returns (side, rgb24)."""
+    side = int(round((EMBLEM[3] - EMBLEM[1]) / fill))
+    ox = int(round(CX - side / 2.0))
+    oy = int(round(CY - side / 2.0))
+    rnd = random.Random(1)                    # same grain on every run
+    out = bytearray(side * side * 3)
+    for j in range(side):
+        y = oy + j
+        for i in range(side):
+            x = ox + i
+            a = keep_alpha(x + 0.5, y + 0.5) if 0 <= x < P and 0 <= y < P else 0.0
+            d = (j * side + i) * 3
+            if a >= 1.0:
+                s = (y * P + x) * 3
+                out[d:d + 3] = src[s:s + 3]
+                continue
+            t = terms(x + 0.5, y + 0.5)
+            g = rnd.uniform(-GRAIN, GRAIN)
+            s = (y * P + x) * 3
+            for k in range(3):
+                bg = sum(c * v for c, v in zip(coef[k], t)) + g
+                v = src[s + k] * a + bg * (1.0 - a) if a > 0 else bg
+                out[d + k] = max(0, min(255, int(round(v))))
+    return side, out
+
+
+# --------------------------------------------------------------------- shape
 
 def squircle_alpha(size):
     """Antialiased coverage mask for the rounded-square corners."""
@@ -94,18 +235,54 @@ def squircle_alpha(size):
     return a
 
 
+# ----------------------------------------------------------------------- png
+
+def paeth(a, b, c):
+    p = a + b - c
+    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+    if pa <= pb and pa <= pc:
+        return a
+    return b if pb <= pc else c
+
+
+def filter_rows(data, row, bpp):
+    """Per-row PNG filtering (Sub, Up or Paeth, whichever looks smallest by the
+    usual sum-of-absolute-differences test). Roughly halves the file size of
+    unfiltered artwork."""
+    out = []
+    prev = bytes(row)
+    for y in range(len(data) // row):
+        cur = data[y * row:(y + 1) * row]
+        cands = []
+        sub = bytearray(row)
+        up = bytearray(row)
+        pa = bytearray(row)
+        for i in range(row):
+            left = cur[i - bpp] if i >= bpp else 0
+            ul = prev[i - bpp] if i >= bpp else 0
+            sub[i] = (cur[i] - left) & 0xFF
+            up[i] = (cur[i] - prev[i]) & 0xFF
+            pa[i] = (cur[i] - paeth(left, prev[i], ul)) & 0xFF
+        for ftype, buf in ((1, sub), (2, up), (4, pa)):
+            cands.append((sum(v if v < 128 else 256 - v for v in buf), ftype, buf))
+        _, ftype, buf = min(cands, key=lambda c: c[0])
+        out.append(bytes([ftype]) + bytes(buf))
+        prev = cur
+    return b"".join(out)
+
+
 def write_png(path, size, rgb, alpha=None):
     if alpha is None:
         ctype, bpp, data = 2, 3, bytes(rgb)
     else:
         ctype, bpp = 6, 4
         out = bytearray(size * size * 4)
-        for i in range(size * size):
-            out[i * 4:i * 4 + 3] = rgb[i * 3:i * 3 + 3]
-            out[i * 4 + 3] = alpha[i]
+        out[0::4] = rgb[0::3]
+        out[1::4] = rgb[1::3]
+        out[2::4] = rgb[2::3]
+        out[3::4] = alpha
         data = bytes(out)
-    row = size * bpp
-    raw = b"".join(b"\x00" + data[y * row:(y + 1) * row] for y in range(size))
+    raw = filter_rows(data, size * bpp, bpp)
 
     def chunk(tag, payload):
         return (struct.pack(">I", len(payload)) + tag + payload +
@@ -120,23 +297,32 @@ def write_png(path, size, rgb, alpha=None):
     return len(png)
 
 
-def main():
-    os.makedirs(OUT, exist_ok=True)
+def main(out_dir):
+    os.makedirs(out_dir, exist_ok=True)
+    src = panel()
+    coef, n = fit_background(src)
+    print(f"  background fitted from {n} samples")
+
+    windows = {}
     jobs = [
-        # name,                  size, rounded, inset scale
-        ("icon-192.png",          192, True,  None),
-        ("icon-512.png",          512, True,  None),
-        ("icon-maskable-512.png", 512, False, 0.76),  # safe zone for Android
-        ("apple-touch-icon.png",  180, False, 1.00),  # iOS applies its own mask
+        # name,                  size, emblem fill,    rounded corners
+        ("icon-192.png",          192, FILL_ANY,       True),
+        ("icon-512.png",          512, FILL_ANY,       True),
+        ("icon-maskable-512.png", 512, FILL_MASKABLE,  False),  # Android masks it
+        ("apple-touch-icon.png",  180, FILL_ANY,       False),  # iOS masks it
     ]
-    for name, size, rounded, scale in jobs:
-        rgb = flatten(size, scale) if scale else artwork(size)
+    for name, size, fill, rounded in jobs:
+        if fill not in windows:
+            windows[fill] = window(src, coef, fill)
+        side, art = windows[fill]
+        rgb = scale(art, side, size)
         alpha = squircle_alpha(size) if rounded else None
-        n = write_png(os.path.join(OUT, name), size, rgb, alpha)
-        shape = "rounded" if rounded else ("inset" if scale < 1 else "square")
-        print(f"  {name:24s} {size}x{size}  {n/1024:6.1f} KB  ({shape})")
+        n = write_png(os.path.join(out_dir, name), size, rgb, alpha)
+        shape = "rounded" if rounded else "square"
+        print(f"  {name:24s} {size}x{size}  {n/1024:6.1f} KB  ({shape}, emblem {fill:.0%})")
 
 
 if __name__ == "__main__":
-    print("Writing icons to", OUT)
-    main()
+    out = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else OUT
+    print("Writing icons to", out)
+    main(out)
