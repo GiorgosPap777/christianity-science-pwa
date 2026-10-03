@@ -7,7 +7,7 @@ Layout expected:
     <archive root>/<N>ος Κύκλος Εκπομπών/<Title> - <D> <Month> <YYYY>/<n>.mp3
 
 Usage:
-    python3 _site/build_index.py [--no-durations] [--jobs N]
+    python3 _site/build_index.py [--no-durations] [--jobs N] [--allow-empty]
 """
 
 import argparse
@@ -17,7 +17,6 @@ import os
 import re
 import subprocess
 import sys
-import unicodedata
 from datetime import datetime, timezone
 from urllib.parse import quote
 
@@ -96,6 +95,8 @@ def main():
     ap.add_argument("--jobs", type=int, default=min(16, (os.cpu_count() or 4) * 4))
     ap.add_argument("--root", help="archive root (overrides $ARCHIVE_ROOT)")
     ap.add_argument("--out", help="output path (overrides $INDEX_OUT)")
+    ap.add_argument("--allow-empty", action="store_true",
+                    help="replace an existing index even if the scan found no episodes")
     args = ap.parse_args()
 
     global ARCHIVE_ROOT, OUT_PATH
@@ -208,17 +209,18 @@ def main():
                 "dateLabel": date_label,
                 "dateLabelEn": (f"{day} {MONTHS_EN[month]} {year}"
                                 if date_iso else ""),
-                "search": normalize(title),
                 "_sort": sort_key,
                 "parts": parts,
                 "totalDur": None,
             })
             n_eps += 1
 
-        # chronological ascending; the UI reverses for display when asked
+        # chronological ascending; the UI reverses for display when asked.
+        # The sort keys are not needed after this; the app does its own
+        # search normalisation, so they only made the file bigger.
         episodes.sort(key=lambda e: (e["_sort"], e["folder"]))
         for e in episodes:
-            del e["_sort"]
+            del e["_sort"], e["folder"]
 
         years = [int(e["date"][:4]) for e in episodes if e["date"]]
         seasons.append({
@@ -256,17 +258,38 @@ def main():
                     bad = [p["n"] for p in e["parts"] if p["dur"] is None]
                     warnings.append(f"Could not read duration for part(s) {bad}: {e['id']}")
 
+    # The archive's absolute path stays out of the file: it is public, and
+    # the app has no use for it.
     data = {
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "archiveRoot": ARCHIVE_ROOT,
         "counts": {"seasons": len(seasons), "episodes": n_eps, "parts": n_parts},
         "infos": infos,
         "warnings": warnings,
         "seasons": seasons,
     }
 
-    with open(OUT_PATH, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, ensure_ascii=False, separators=(",", ":"))
+    # A briefly missing network mount scans as an empty archive. Keep the
+    # last good index rather than replace it with nothing.
+    if n_eps == 0 and os.path.exists(OUT_PATH) and not args.allow_empty:
+        print(f"Found no episodes; keeping the existing {OUT_PATH} "
+              "(pass --allow-empty to replace it).", file=sys.stderr)
+        return 2
+
+    # Written beside the target and renamed over it, so the server (which
+    # may be running) only ever sees the old file or the complete new one.
+    tmp = OUT_PATH + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, separators=(",", ":"))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, OUT_PATH)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
     size_kb = os.path.getsize(OUT_PATH) / 1024
     print(f"\nWrote {OUT_PATH} ({size_kb:.0f} KB)")
@@ -285,12 +308,6 @@ def main():
     print("\nNo warnings.")
     return 0
 
-
-def normalize(s):
-    """Lowercase, strip Greek diacritics, fold final sigma. Mirrors app.js."""
-    s = unicodedata.normalize("NFD", s.lower())
-    s = "".join(c for c in s if not unicodedata.combining(c))
-    return s.replace("ς", "σ")
 
 
 if __name__ == "__main__":

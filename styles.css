@@ -164,6 +164,7 @@ main { max-width: 62rem; margin: 0 auto; padding: 1rem clamp(.75rem, 3vw, 1.75re
   border-radius: var(--radius); margin-bottom: .6rem; overflow: hidden;
   box-shadow: var(--shadow);
 }
+.season-title { font-size: inherit; font-weight: inherit; letter-spacing: inherit; }
 .season-head {
   width: 100%; display: flex; align-items: center; gap: .7rem;
   padding: .8rem 1rem; background: none; border: 0; text-align: start;
@@ -201,11 +202,13 @@ main { max-width: 62rem; margin: 0 auto; padding: 1rem clamp(.75rem, 3vw, 1.75re
 .ep.listened .ep-title, .ep.listened .ep-date { opacity: .5; }
 .ep.playing { background: var(--accent-soft); }
 .ep.playing .ep-title { color: var(--accent); font-weight: 620; }
+/* Being re-heard: the current row should not be the faintest on screen. */
+.ep.playing.listened .ep-title, .ep.playing.listened .ep-date { opacity: 1; }
 
 .ep-play {
   flex: none; width: 30px; height: 30px; border-radius: 50%;
   border: 1px solid var(--line); background: var(--panel);
-  display: grid; place-items: center; padding: 0;
+  display: grid; place-items: center; padding: 0; position: relative;
 }
 .ep-play svg { width: 12px; height: 12px; fill: var(--text); }
 .ep:hover .ep-play { border-color: var(--accent); }
@@ -234,7 +237,13 @@ main { max-width: 62rem; margin: 0 auto; padding: 1rem clamp(.75rem, 3vw, 1.75re
 .ep-check {
   flex: none; width: 28px; height: 28px; border-radius: 50%;
   border: 1px solid var(--line); background: transparent;
-  display: grid; place-items: center; padding: 0;
+  display: grid; place-items: center; padding: 0; position: relative;
+}
+/* Small buttons keep their look but take taps across 44px, the usual
+   minimum for a finger. */
+.ep-play::after, .ep-check::after, #btn-np-open::after {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 44px; height: 44px; transform: translate(-50%, -50%);
 }
 .ep-check svg { width: 14px; height: 14px; fill: none; stroke: var(--faint); stroke-width: 2.6; }
 .ep-check:hover { border-color: var(--ok); }
@@ -255,8 +264,10 @@ mark { background: var(--accent-soft); color: inherit; border-radius: 3px; paddi
 .ep-progress { height: 3px; background: var(--panel-2); }
 .ep-progress-fill { height: 100%; width: 0; background: var(--accent); transition: width .25s linear; }
 
+/* Wider than the list column: at 62rem the side columns are too narrow for
+   the title and for the chips, which then wrap onto a third row. */
 .player-inner {
-  max-width: 62rem; margin: 0 auto;
+  max-width: 76rem; margin: 0 auto;
   padding: .55rem clamp(.75rem, 3vw, 1.75rem) .7rem;
   display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center; gap: .9rem;
@@ -307,6 +318,18 @@ mark { background: var(--accent-soft); color: inherit; border-radius: 3px; paddi
 }
 .play-btn:hover { background: var(--accent); filter: brightness(1.08); }
 .play-btn svg { width: 21px; height: 21px; }
+
+/* Buffering: a ring turning round the play button (app.js sets data-loading
+   while playback waits for data). */
+#btn-play[data-loading]::before, .ep-play[data-loading]::before {
+  content: ""; position: absolute; inset: -4px; border-radius: 50%;
+  border: 2px solid transparent; border-top-color: var(--accent);
+  animation: spin .8s linear infinite; pointer-events: none;
+}
+@keyframes spin { to { transform: rotate(1turn); } }
+@media (prefers-reduced-motion: reduce) {
+  #btn-play[data-loading]::before, .ep-play[data-loading]::before { animation-duration: 2.4s; }
+}
 
 .p-seek { display: flex; align-items: center; gap: .5rem; width: min(30rem, 100%); }
 .time {
@@ -360,7 +383,9 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--faint); }
   background-size: 4px 4px, 4px 4px;
   background-repeat: no-repeat;
 }
-.volume { width: 5rem; flex: none; }
+/* The element type is repeated so this outranks input[type="range"] above,
+   which would otherwise stretch the slider across the bar. */
+input[type="range"].volume { width: 5rem; flex: none; }
 
 /* Sleep timer: a chip showing the moon and what is left, with the native
    <select> stretched invisibly over it so the OS picker does the choosing. */
@@ -407,7 +432,13 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--faint); }
   .p-seek { width: 100%; }
   .ep-sub { flex-wrap: wrap; }
   .season-years { display: none; }
+  .season-meta .season-count { display: none; }   /* the unheard pill says enough */
 }
+
+/* While searching, the results come first. */
+body.searching #install-card,
+body.searching #continue-section,
+body.searching #recent-section { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }

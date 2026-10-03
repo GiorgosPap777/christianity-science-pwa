@@ -10,9 +10,14 @@
    Registered with scope "/" (see the Service-Worker-Allowed header in serve.py)
    so it can intercept the audio living at the archive root, not just /_site/. */
 
-const VERSION = "v1";
+const VERSION = "v2";
 const SHELL = `cs-shell-${VERSION}`;
 const AUDIO = "cs-audio-v1";          // unversioned: survives shell updates
+
+/* How long the shell waits for the network before falling back to its cached
+   copy. On a connection that is up but passes nothing (a tunnel, a lift, one
+   bar of signal) fetch() can hang far longer than that before it fails. */
+const NETWORK_TIMEOUT_MS = 3000;
 
 const SHELL_ASSETS = [
   "/_site/",
@@ -65,7 +70,7 @@ self.addEventListener("fetch", (event) => {
   if (url.pathname.toLowerCase().endsWith(".mp3")) {
     event.respondWith(audioResponse(req, url));
   } else {
-    event.respondWith(networkFirst(req));
+    event.respondWith(networkFirst(req, event));
   }
 });
 
@@ -132,19 +137,34 @@ async function audioResponse(req, url) {
 
 /* ------------------------------------------------------------------ shell */
 
-async function networkFirst(req) {
+async function networkFirst(req, event) {
   const cache = await caches.open(SHELL);
-  try {
-    const res = await fetch(req);
-    if (res && res.ok && !res.redirected) cache.put(req, res.clone());
+  let stored = Promise.resolve();
+  const network = fetch(req).then((res) => {
+    if (res && res.ok && !res.redirected) stored = cache.put(req, res.clone()).catch(() => {});
     return res;
+  });
+  /* If the cached copy wins the race, the network response still lands in
+     the cache, ready for the next load. */
+  event.waitUntil(network.then(() => stored, () => {}));
+
+  const cached = async () =>
+    (await cache.match(req)) ||
+    (req.mode === "navigate" ? await cache.match("/_site/") : undefined);
+
+  let timer;
+  const slow = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(null), NETWORK_TIMEOUT_MS);
+  });
+  try {
+    const res = await Promise.race([network, slow]);
+    if (res) return res;
+    return (await cached()) || (await network);   // nothing cached: keep waiting
   } catch (err) {
-    const hit = await cache.match(req);
+    const hit = await cached();
     if (hit) return hit;
-    if (req.mode === "navigate") {
-      const shell = await cache.match("/_site/");
-      if (shell) return shell;
-    }
     throw err;
+  } finally {
+    clearTimeout(timer);
   }
 }

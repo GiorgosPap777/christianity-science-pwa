@@ -7,7 +7,7 @@ const I18N = {
     "app.title": "Χριστιανισμός - Επιστήμη",
     "app.subtitle": "{seasons} κύκλοι · {episodes} εκπομπές · {hours} ώρες",
     "app.loading": "Φόρτωση αρχείου…",
-    "app.loadError": "Δεν ήταν δυνατή η φόρτωση του index.json. Τρέξτε: python3 _site/build_index.py",
+    "app.loadError": "Δεν ήταν δυνατή η φόρτωση της λίστας εκπομπών. Ελέγξτε τη σύνδεση και ανανεώστε τη σελίδα.",
 
     "search.placeholder": "Αναζήτηση τίτλου ή ημερομηνίας…",
     "search.clear": "Καθαρισμός αναζήτησης",
@@ -59,6 +59,7 @@ const I18N = {
     "player.speed": "Ταχύτητα",
     "player.volume": "Ένταση",
     "player.seek": "Θέση στο μέρος",
+    "player.seekValue": "{cur} από {dur}",
     "player.episodeProgress": "Πρόοδος εκπομπής",
     "player.empty": "Επιλέξτε μια εκπομπή",
     "player.close": "Κλείσιμο",
@@ -90,7 +91,7 @@ const I18N = {
     "install.https": "Η εγκατάσταση χρειάζεται HTTPS (ή localhost). Σε αυτή τη διεύθυνση δεν είναι διαθέσιμη.",
 
     "offline.off": "Εκτός σύνδεσης: ανενεργό",
-    "offline.waiting": "Αποθήκευση…",
+    "offline.idle": "Εκτός σύνδεσης: ενεργό",
     "offline.saving": "Αποθήκευση {pct}%",
     "offline.ready": "Διαθέσιμο εκτός σύνδεσης",
     "offline.partial": "{n}/{total} μέρη",
@@ -103,7 +104,7 @@ const I18N = {
     "app.title": "Christianity - Science",
     "app.subtitle": "{seasons} seasons · {episodes} episodes · {hours} hours",
     "app.loading": "Loading archive…",
-    "app.loadError": "Could not load index.json. Run: python3 _site/build_index.py",
+    "app.loadError": "Couldn’t load the list of episodes. Check your connection and reload the page.",
 
     "search.placeholder": "Search titles or dates…",
     "search.clear": "Clear search",
@@ -153,6 +154,7 @@ const I18N = {
     "player.speed": "Speed",
     "player.volume": "Volume",
     "player.seek": "Position in part",
+    "player.seekValue": "{cur} of {dur}",
     "player.episodeProgress": "Episode progress",
     "player.empty": "Pick an episode",
     "player.close": "Close",
@@ -184,7 +186,7 @@ const I18N = {
     "install.https": "Installing needs HTTPS (or localhost). It isn’t available on this address.",
 
     "offline.off": "Offline saving: off",
-    "offline.waiting": "Saving…",
+    "offline.idle": "Offline saving: on",
     "offline.saving": "Saving {pct}%",
     "offline.ready": "Available offline",
     "offline.partial": "{n}/{total} parts",

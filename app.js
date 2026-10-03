@@ -19,29 +19,69 @@ function write(key, value) {
   try { localStorage.setItem(K + key, JSON.stringify(value)); } catch (e) {}
 }
 
-const store = {
-  lang: read("lang", "el"),
-  progress: read("progress", {}),   // id -> {part, time, updated}
-  listened: read("listened", {}),   // id -> true
-  last: read("last", null),         // {id, part, time}
-  recent: read("recent", []),       // [id, ...] most recent first
-  ui: Object.assign({
-    sort: "newest",                 // "newest" | "oldest"
-    unheardOnly: false,
-    open: [],                       // open season numbers
-    volume: 1,
-    speed: 1,
-    offlineCache: true,
-  }, read("ui", {})),
-  cachedEps: read("cachedEps", []),   // episode ids held in the audio cache, MRU first
-};
+/* Saved state is checked on the way in. A value from an older version, a
+   half-written one or a hand edit must not break the app: an invalid
+   playbackRate, for one, throws, and would come back on every reload. Each
+   key keeps what is valid and falls back to its default for the rest. */
+const SPEEDS = Array.from(document.querySelectorAll("#speed option"), (o) => parseFloat(o.value));
+const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+const isNum = (v) => typeof v === "number" && isFinite(v);
+const strings = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
 
-const saveUI       = () => write("ui", store.ui);
-const saveListened = () => write("listened", store.listened);
-const saveProgress = () => write("progress", store.progress);
-const saveRecent   = () => write("recent", store.recent);
-const saveLast     = () => write("last", store.last);
-const saveCached   = () => write("cachedEps", store.cachedEps);
+const CLEAN = {
+  lang: (v) => (v === "en" ? "en" : "el"),
+  progress: (v) => {                   // id -> {part, time, updated}
+    const out = {};
+    if (isObj(v)) Object.keys(v).forEach((id) => {
+      const p = v[id];
+      if (isObj(p) && Number.isInteger(p.part) && p.part >= 0 && isNum(p.time) && p.time >= 0) {
+        out[id] = { part: p.part, time: p.time, updated: isNum(p.updated) ? p.updated : 0 };
+      }
+    });
+    return out;
+  },
+  listened: (v) => {                   // id -> true
+    const out = {};
+    if (isObj(v)) Object.keys(v).forEach((id) => { if (v[id] === true) out[id] = true; });
+    return out;
+  },
+  last: (v) => (isObj(v) && typeof v.id === "string" ? {   // {id, part, time}
+    id: v.id,
+    part: Number.isInteger(v.part) && v.part >= 0 ? v.part : 0,
+    time: isNum(v.time) && v.time >= 0 ? v.time : 0,
+  } : null),
+  recent: strings,                     // [id, ...] most recent first
+  cachedEps: strings,                  // ids held in the audio cache, MRU first
+  ui: (v) => {
+    const u = isObj(v) ? v : {};
+    return {
+      sort: u.sort === "oldest" ? "oldest" : "newest",
+      unheardOnly: u.unheardOnly === true,
+      open: Array.isArray(u.open) ? u.open.filter(Number.isInteger) : [],  // season numbers
+      volume: isNum(u.volume) ? Math.max(0, Math.min(1, u.volume)) : 1,
+      speed: SPEEDS.indexOf(u.speed) !== -1 ? u.speed : 1,
+      offlineCache: u.offlineCache !== false,
+    };
+  },
+};
+const load = (key) => CLEAN[key](read(key, null));
+
+const store = {};
+Object.keys(CLEAN).forEach((key) => { store[key] = load(key); });
+
+/* The installed app and a browser tab can be open at once, so a change is
+   applied to a fresh read of its key, not to this tab's copy, which would
+   write back whatever was there when this tab loaded. `change` edits the
+   value in place or returns a new one. */
+function update(key, change) {
+  const v = load(key);
+  const res = change(v);
+  store[key] = res === undefined ? v : res;
+  write(key, store[key]);
+}
+
+const saveUI     = () => write("ui", store.ui);   // view settings: per tab, last one wins
+const saveLast   = () => write("last", store.last);
 
 window.__lang = store.lang;
 
@@ -99,11 +139,17 @@ function elapsedBefore(ep, partIdx) {
 }
 
 const isListened = (id) => !!store.listened[id];
+/* Played to the end (or marked so), and not started again since. */
+const finished = (id) => isListened(id) && !store.progress[id];
 
 function setListened(id, on) {
-  if (on) store.listened[id] = true;
-  else delete store.listened[id];
-  saveListened();
+  update("listened", (l) => { if (on) l[id] = true; else delete l[id]; });
+}
+
+/* Where an episode picks up: its saved position, else the start. */
+function resumeAt(ep) {
+  const p = store.progress[ep.id];
+  return p && p.part < ep.parts.length ? p : { part: 0, time: 0 };
 }
 
 function seasonLabel(s) {
@@ -213,9 +259,11 @@ const SVG_CHECK = '<svg viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6.5" fill="n
 const SVG_CARET = '<svg class="caret" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7z"/></svg>';
 const SVG_CLOUD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 19a4.5 4.5 0 01-.4-8.98 6 6 0 0111.64-1.7A4.25 4.25 0 0117.75 19z"/></svg>';
 
-/* The row's play button turns into pause while that episode is playing. */
+/* The row's play button turns into pause while that episode is playing, and
+   shows the buffering ring like the player's. */
 function setRowButton(btn, ep) {
-  const playing = !!(cur && cur.ep === ep && !audio.paused);
+  const playing = !!(cur && cur.ep === ep && isPlaying());
+  btn.toggleAttribute("data-loading", playing && loading);
   btn.innerHTML = playing ? SVG_PAUSE : SVG_PLAY;
   const lbl = t(playing ? "player.pause" : "ep.play");
   btn.title = lbl;
@@ -234,10 +282,9 @@ function episodeRow(ep) {
   play.className = "ep-play";
   setRowButton(play, ep);
   play.addEventListener("click", () => {
-    const p = store.progress[ep.id];
-    if (cur && cur.ep === ep) togglePlay();
-    else if (p) loadEpisode(ep, p.part, p.time, true);
-    else loadEpisode(ep, 0, 0, true);
+    if (cur && cur.ep === ep) { togglePlay(); return; }
+    const p = resumeAt(ep);
+    loadEpisode(ep, p.part, p.time, true);
   });
 
   const main = document.createElement("div");
@@ -318,10 +365,33 @@ function episodeRow(ep) {
   return row;
 }
 
+/* Rebuilding the list would drop keyboard focus onto <body>, which puts a
+   keyboard or screen-reader user back at the top of the page. So the focused
+   control is noted first and found again in the new list: the same button of
+   the same episode, else that season's header. */
+function focusedInList() {
+  const el = document.activeElement;
+  if (!el || !$("#seasons").contains(el)) return null;
+  const row = el.closest(".ep");
+  const sec = el.closest(".season");
+  const cls = ["ep-play", "ep-check"].filter((c) => el.classList.contains(c))[0];
+  return { id: row && row.dataset.id, cls: cls, season: sec && sec.dataset.num };
+}
+function refocus(f) {
+  if (!f) return;
+  const row = f.id && f.cls &&
+    document.querySelector('.ep[data-id="' + cssEscape(f.id) + '"]');
+  const el = (row && row.querySelector("." + f.cls)) ||
+    (f.season && document.querySelector('.season[data-num="' + f.season + '"] .season-head'));
+  if (el) el.focus({ preventScroll: true });
+}
+
 function renderSeasons() {
   const host = $("#seasons");
+  const focus = focusedInList();
   host.textContent = "";
   const searching = !!view.query;
+  document.body.classList.toggle("searching", searching);
   let shown = 0;
 
   // Seasons follow the same newest/oldest toggle as the episodes inside them.
@@ -364,7 +434,10 @@ function renderSeasons() {
     if (unheard === 0) {
       meta.textContent = t("season.allListened");
     } else {
-      meta.textContent = t("season.episodes", { n: s.episodes.length }) + " ";
+      const count = document.createElement("span");
+      count.className = "season-count";               // hidden on phones
+      count.textContent = t("season.episodes", { n: s.episodes.length }) + " ";
+      meta.appendChild(count);
       const pill = document.createElement("span");
       pill.className = "unheard-pill";
       pill.textContent = t("season.unheard", { n: unheard });
@@ -391,7 +464,11 @@ function renderSeasons() {
       saveUI();
       render();
     });
-    sec.appendChild(head);
+    /* A heading, so screen readers can jump from season to season. */
+    const h = document.createElement("h2");
+    h.className = "season-title";
+    h.appendChild(head);
+    sec.appendChild(h);
 
     if (open) {
       const body = document.createElement("div");
@@ -413,13 +490,14 @@ function renderSeasons() {
   } else {
     st.hidden = true;
   }
+  refocus(focus);
 }
 
 function renderContinue() {
   const sec = $("#continue-section");
   const last = store.last;
   const ep = last && BY_ID[last.id];
-  if (!ep) { sec.hidden = true; return; }
+  if (!ep || finished(ep.id)) { sec.hidden = true; return; }
   sec.hidden = false;
 
   const total = epTotal(ep);
@@ -459,8 +537,8 @@ function renderContinue() {
 
 function renderRecent() {
   const sec = $("#recent-section");
-  const ids = store.recent.filter((id) => BY_ID[id] &&
-    (!store.last || id !== store.last.id));
+  const inContinue = store.last && !finished(store.last.id) ? store.last.id : null;
+  const ids = store.recent.filter((id) => BY_ID[id] && id !== inContinue);
   if (ids.length === 0) { sec.hidden = true; return; }
   sec.hidden = false;
 
@@ -480,8 +558,8 @@ function renderRecent() {
     sm.textContent = epDate(ep);
     b.appendChild(ttl); b.appendChild(sm);
     b.addEventListener("click", () => {
-      const p = store.progress[ep.id];
-      loadEpisode(ep, p ? p.part : 0, p ? p.time : 0, true);
+      const p = resumeAt(ep);
+      loadEpisode(ep, p.part, p.time, true);
     });
     li.appendChild(b);
     list.appendChild(li);
@@ -501,12 +579,33 @@ let cur = null;            // {ep, part}
 let pendingSeek = 0;
 let scrubbing = false;
 let lastSave = 0;
+let lastGood = 0;          // position in the part that last played without error
+let retryOnline = false;   // a part failed while playing; retry when back online
+let loading = false;       // playing, but waiting for data
 
-function loadEpisode(ep, part, time, autoplay) {
+/* Whether this tab has a position of its own to save. A tab that only put
+   the last episode back on screen at startup has nothing new, and saving
+   would overwrite what another tab has played since. */
+let dirty = false;
+/* Another tab has saved a newer position since this one last played. This
+   tab then saves nothing, and its next Play picks up from that position. */
+let handedOff = false;
+
+const isPlaying = () => !audio.paused && !audio.error;
+/* A seek or skip here is the listener's own doing: it is saved, and this
+   tab's position counts again over the other tab's. */
+function takeOver() { dirty = true; handedOff = false; }
+
+/* `quiet` only puts the episode on screen, saving nothing: restoring it at
+   startup, or following another tab. */
+function loadEpisode(ep, part, time, autoplay, quiet) {
   if (!ep) return;
   part = Math.max(0, Math.min(part | 0, ep.parts.length - 1));
   cur = { ep: ep, part: part };
   pendingSeek = time || 0;
+  lastGood = pendingSeek;
+  retryOnline = false;
+  setLoading(false);
 
   audio.src = ep.parts[part].url;
   audio.playbackRate = store.ui.speed;
@@ -516,9 +615,22 @@ function loadEpisode(ep, part, time, autoplay) {
   $("#player").hidden = false;
   document.body.classList.remove("no-player");
 
-  store.recent = [ep.id].concat(store.recent.filter((x) => x !== ep.id)).slice(0, 20);
-  saveRecent();
-  persistPosition(true);
+  handedOff = false;
+  dirty = !quiet;
+  if (!quiet) {
+    noteRecent(ep.id);
+    persistPosition(true);
+  }
+
+  /* Saving for offline starts once the episode actually plays (see the play
+     event), not when it is merely loaded: putting last session's episode
+     back on screen must not download 50 MB nobody asked for. Moving to
+     another episode stops saving the previous one. */
+  if (prefetchedFor !== ep.id) {
+    if (prefetchCtl) prefetchCtl.abort();
+    prefetchedFor = null;
+    setOffline(store.cachedEps.indexOf(ep.id) !== -1 ? "ready" : "idle");
+  }
 
   if (autoplay) {
     const p = audio.play();
@@ -526,23 +638,61 @@ function loadEpisode(ep, part, time, autoplay) {
   }
   updatePlayerText();
   updateMediaSession();
-  schedulePrefetch();
   render();
+}
+
+function noteRecent(id) {
+  if (store.recent[0] === id) return;
+  update("recent", (r) => [id].concat(r.filter((x) => x !== id)).slice(0, 20));
 }
 
 function skip(delta) {
   if (!cur || !isFinite(audio.duration)) return;
   audio.currentTime = Math.max(0, Math.min(audio.duration, audio.currentTime + delta));
+  takeOver();
+}
+
+function play() {
+  if (!cur) return;
+  if (handedOff) {
+    if (followOtherTab(true)) return;
+  }
+  /* After a load error (a tunnel at a part boundary, a server blip) the
+     element is dead and play() only rejects, so load the part again from
+     where it stopped. */
+  if (audio.error) {
+    loadEpisode(cur.ep, cur.part, lastGood, true);
+    return;
+  }
+  const p = audio.play();
+  if (p && p.catch) p.catch(() => {});
 }
 
 function togglePlay() {
   if (!cur) return;
-  if (audio.paused) {
-    const p = audio.play();
-    if (p && p.catch) p.catch(() => {});
-  } else {
-    audio.pause();
-  }
+  if (isPlaying()) audio.pause();
+  else play();
+}
+
+/* Picks up where another tab left off. Returns false if there is nothing to
+   pick up, e.g. that tab finished the newest episode. */
+function followOtherTab(autoplay) {
+  handedOff = false;
+  dirty = false;
+  const last = store.last;
+  const ep = last && BY_ID[last.id];
+  if (!ep) return false;
+  loadEpisode(ep, last.part, last.time, autoplay, !autoplay);
+  return true;
+}
+
+function setLoading(on) {
+  if (loading === on) return;
+  loading = on;
+  const b = $("#btn-play");
+  b.toggleAttribute("data-loading", on);
+  if (on) b.setAttribute("aria-busy", "true"); else b.removeAttribute("aria-busy");
+  markPlayingRow();
 }
 
 function goPart(delta) {
@@ -555,7 +705,9 @@ function goPart(delta) {
 function goEpisode(delta) {
   if (!cur) return;
   const nx = neighbour(cur.ep, delta);
-  if (nx) loadEpisode(nx, 0, 0, true);
+  if (!nx) return;
+  const p = resumeAt(nx);
+  loadEpisode(nx, p.part, p.time, true);
 }
 
 function onEnded() {
@@ -572,11 +724,20 @@ function onEnded() {
     return;
   }
   setListened(ep.id, true);                       // all parts played through
-  delete store.progress[ep.id];
-  saveProgress();
+  update("progress", (p) => { delete p[ep.id]; });
   const nx = neighbour(ep, 1);
-  if (nx) loadEpisode(nx, 0, 0, !stop);
-  else { updatePlayerText(); render(); }
+  if (nx) {
+    const p = resumeAt(nx);                        // it may have been started before
+    loadEpisode(nx, p.part, p.time, !stop);
+    return;
+  }
+  /* Caught up with the newest episode: there is nothing to continue, so the
+     Continue card goes and the next start does not bring this one back. */
+  store.last = null;
+  saveLast();
+  dirty = false;
+  updatePlayerText();
+  render();
 }
 
 /* ------------------------------------------------------------ sleep timer
@@ -650,14 +811,15 @@ function labelSleepOptions() {
 }
 
 function persistPosition(force) {
-  if (!cur) return;
+  if (!cur || !dirty || handedOff) return;
   const now = Date.now();
   if (!force && now - lastSave < 5000) return;
   lastSave = now;
-  const time = pendingSeek > 0 ? pendingSeek : (audio.currentTime || 0);
-  store.progress[cur.ep.id] = { part: cur.part, time: time, updated: now };
-  store.last = { id: cur.ep.id, part: cur.part, time: time };
-  saveProgress();
+  const time = audio.error ? lastGood
+    : pendingSeek > 0 ? pendingSeek : (audio.currentTime || 0);
+  const id = cur.ep.id, part = cur.part;
+  update("progress", (p) => { p[id] = { part: part, time: time, updated: now }; });
+  store.last = { id: id, part: part, time: time };
   saveLast();
   renderContinue();   // keep the "continue listening" card in step with playback
 }
@@ -702,7 +864,7 @@ function updatePlayerText() {
   $("#btn-prev-ep").disabled = !neighbour(ep, -1);
   $("#btn-next-ep").disabled = !neighbour(ep, 1);
 
-  const playing = !audio.paused;
+  const playing = isPlaying();
   $("#btn-play").dataset.state = playing ? "playing" : "paused";
   const lbl = t(playing ? "player.pause" : "player.play");
   $("#btn-play").title = lbl;
@@ -726,6 +888,8 @@ function updateTimes() {
   seek.max = dur || 1;
   if (!scrubbing) seek.value = t0;
   setFill(seek);
+  seek.setAttribute("aria-valuetext",
+    t("player.seekValue", { cur: fmtTime(t0), dur: fmtTime(dur) }));
 
   if (cur) {
     const total = epTotal(cur.ep);
@@ -898,8 +1062,18 @@ function wire() {
   });
 
   /* connection state */
-  window.addEventListener("online", renderNetBanner);
+  window.addEventListener("online", () => {
+    renderNetBanner();
+    /* A part that failed while playing (no signal) carries on by itself. */
+    if (cur && audio.error && retryOnline) {
+      retryOnline = false;
+      loadEpisode(cur.ep, cur.part, lastGood, true);
+    }
+  });
   window.addEventListener("offline", renderNetBanner);
+
+  /* other tabs */
+  window.addEventListener("storage", onStorage);
 
   /* seek */
   const seek = $("#seek");
@@ -912,6 +1086,7 @@ function wire() {
     if (!scrubbing) return;
     scrubbing = false;
     audio.currentTime = parseFloat(seek.value);
+    takeOver();
     persistPosition(true);
   };
   seek.addEventListener("change", commit);
@@ -946,22 +1121,36 @@ function wire() {
     updatePositionState();
   });
   audio.addEventListener("timeupdate", () => {
+    if (!audio.error && pendingSeek === 0) lastGood = audio.currentTime || 0;
     updateTimes();
     persistPosition(false);
     checkSleep();     // timeupdate keeps firing in a background tab; intervals may not
   });
   audio.addEventListener("play", () => {
+    takeOver();
+    noteRecent(cur.ep.id);        // a restored episode only counts once played
+    schedulePrefetch();
     updatePlayerText(); markPlayingRow(); updatePositionState();
   });
   audio.addEventListener("pause", () => {
+    setLoading(false);
     updatePlayerText(); markPlayingRow(); updatePositionState(); persistPosition(true);
   });
+  /* Buffering. `waiting` means playback stopped for want of data; `stalled`
+     only that data is slow, which matters only once the buffer has run out. */
+  const buffering = () => { if (!audio.paused && audio.readyState < 3) setLoading(true); };
+  audio.addEventListener("waiting", buffering);
+  audio.addEventListener("stalled", buffering);
+  ["playing", "ended", "emptied"].forEach((ev) =>
+    audio.addEventListener(ev, () => setLoading(false)));
   audio.addEventListener("seeked", updatePositionState);
   audio.addEventListener("ratechange", updatePositionState);
   audio.addEventListener("ended", onEnded);
   audio.addEventListener("error", () => {
     if (!audio.src || !cur) return;
     console.error("Audio failed to load:", audio.src);
+    retryOnline = !audio.paused;
+    setLoading(false);
     const saved = store.cachedEps.indexOf(cur.ep.id) !== -1;
     showToast(t(!navigator.onLine && !saved ? "player.notSaved" : "player.loadError"));
     updatePlayerText();
@@ -989,11 +1178,13 @@ function wire() {
     }
   });
 
-  /* flush position on the way out */
+  /* flush position on the way out; on the way back, catch up with any
+     other tab that played meanwhile */
   const flush = () => persistPosition(true);
   window.addEventListener("pagehide", flush);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") flush();
+    else if (handedOff && !isPlaying()) followOtherTab(false);
   });
 
   /* Keep the page's bottom padding equal to the player's real height, which
@@ -1011,18 +1202,58 @@ function wire() {
   if ("mediaSession" in navigator) {
     const ms = navigator.mediaSession;
     const set = (a, fn) => { try { ms.setActionHandler(a, fn); } catch (e) {} };
-    set("play", () => { if (cur && audio.paused) togglePlay(); });
-    set("pause", () => { if (cur && !audio.paused) togglePlay(); });
-    set("previoustrack", () => goPart(-1));
-    set("nexttrack", () => goPart(1));
+    set("play", () => { if (cur && !isPlaying()) play(); });
+    set("pause", () => { if (cur && !audio.paused) audio.pause(); });
+    /* Headphone and lock-screen buttons work in parts, but carry on across
+       episodes. Previous restarts the part first, like most players. */
+    set("previoustrack", () => {
+      if (!cur) return;
+      if ((audio.currentTime || 0) > 3) { audio.currentTime = 0; takeOver(); return; }
+      if (cur.part > 0) { goPart(-1); return; }
+      const pv = neighbour(cur.ep, -1);
+      if (pv) loadEpisode(pv, pv.parts.length - 1, 0, true);
+    });
+    set("nexttrack", () => {
+      if (!cur) return;
+      if (cur.part < cur.ep.parts.length - 1) goPart(1); else goEpisode(1);
+    });
     set("seekbackward", (d) => skip(-((d && d.seekOffset) || 15)));
     set("seekforward", (d) => skip((d && d.seekOffset) || 15));
     set("seekto", (d) => {
       if (!cur || !d || !isFinite(d.seekTime) || !isFinite(audio.duration)) return;
       audio.currentTime = Math.max(0, Math.min(audio.duration, d.seekTime));
+      takeOver();
       persistPosition(true);
     });
   }
+}
+
+/* Another tab saved something. Listening marks, positions and the saved
+   list are taken over as they are; this tab's view settings stay its own. */
+function onStorage(e) {
+  if (e.storageArea !== localStorage) return;
+  const all = e.key === null;                      // storage was cleared
+  const shared = ["listened", "progress", "recent", "cachedEps", "last"]
+    .filter((k) => all || e.key === K + k);
+  if (shared.length === 0) return;
+  shared.forEach((k) => {
+    if (k !== "last") store[k] = load(k);
+    else if (!isPlaying()) {                       // while playing, ours is newer
+      store.last = load("last");
+      handedOff = true;
+    }
+  });
+  if (!DATA) return;
+  /* A tab in view shows the other tab's episode straight away. Only a new
+     episode or part reloads the audio, not every 5 s save of the position;
+     Play picks up the latest one anyway. */
+  const l = store.last;
+  if (handedOff && l && cur && document.visibilityState === "visible" &&
+      (l.id !== cur.ep.id || l.part !== cur.part)) {
+    followOtherTab(false);
+  }
+  render();
+  updatePlayerText();
 }
 
 function syncPlayerHeight() {
@@ -1235,7 +1466,7 @@ function renderOfflineChip() {
   else if (offlineUI.state === "saving") full = t("offline.saving", { pct: offlineUI.pct });
   else if (offlineUI.state === "ready")  full = t("offline.ready");
   else if (offlineUI.state === "error")  full = t("offline.error");
-  else                                   full = t("offline.waiting");
+  else                                   full = t("offline.idle");
 
   /* The Greek wording is long; on a phone the icon carries the meaning and the
      full text lives in the tooltip / accessible name. */
@@ -1380,9 +1611,8 @@ async function prefetchEpisode(ep, fromPart) {
 
 /* Records a fully saved episode, most recent first. */
 function noteCached(id) {
-  store.cachedEps = [id].concat(store.cachedEps.filter((x) => x !== id))
-    .slice(0, MAX_CACHED_EPISODES);
-  saveCached();
+  update("cachedEps", (c) => [id].concat(c.filter((x) => x !== id))
+    .slice(0, MAX_CACHED_EPISODES));
 }
 
 /* Keep only the most recent few episodes; the archive is 20 GB and the device
@@ -1394,6 +1624,7 @@ async function pruneAudioCache() {
   const keys = await cache.keys();
   const have = new Set(keys.map((req) => new URL(req.url).pathname));
 
+  store.cachedEps = load("cachedEps");             // another tab may have saved one
   const keepIds = store.cachedEps.filter((id) => BY_ID[id] &&
     BY_ID[id].parts.every((p) => have.has(pathOf(p.url)))).slice(0, MAX_CACHED_EPISODES);
 
@@ -1413,7 +1644,7 @@ async function pruneAudioCache() {
 
   const changed = keepIds.join("\n") !== store.cachedEps.join("\n");
   store.cachedEps = keepIds;
-  saveCached();
+  write("cachedEps", keepIds);
   if (changed) renderSeasons();
 }
 
@@ -1422,7 +1653,7 @@ async function clearAudioCache() {
   if (prefetchCtl) prefetchCtl.abort();
   await caches.delete(AUDIO_CACHE);
   store.cachedEps = [];
-  saveCached();
+  write("cachedEps", []);
   prefetchedFor = null;
   setOffline("idle");
   renderSeasons();
@@ -1525,9 +1756,11 @@ function setupInstall() {
     show("ios");
   } else if (!window.isSecureContext) {
     show(null, "install.https");
-  } else {
-    /* Chrome/Edge fire beforeinstallprompt; if nothing arrives, fall back to
-       telling the user where the menu item is. */
+  } else if (/Android/i.test(navigator.userAgent)) {
+    /* Chrome fires beforeinstallprompt; if nothing arrives, fall back to
+       telling the user where the menu item is. Every Android browser has
+       one. On a desktop that has no prompt (Firefox, Safari) there is
+       nothing to point to, so the card stays hidden. */
     setTimeout(() => {
       if (!deferredPrompt && card.hidden) show(null, "install.manual");
     }, 2000);
@@ -1573,12 +1806,16 @@ async function boot() {
 
   let json;
   try {
-    const res = await fetch("index.json", { cache: "no-store" });
+    /* no-cache: the browser asks the server, and an unchanged index comes
+       back as a 304 from its own copy instead of ~800 KB again. */
+    const res = await fetch("index.json", { cache: "no-cache" });
     if (!res.ok) throw new Error(res.status + " " + res.statusText);
     json = await res.json();
   } catch (err) {
+    console.error("Could not load index.json (" + err.message + "). " +
+      "If it is missing, run: python3 _site/build_index.py");
     const st = $("#status");
-    st.textContent = t("app.loadError") + "  (" + err.message + ")";
+    st.textContent = t("app.loadError");
     st.classList.add("error");
     return;
   }
@@ -1604,21 +1841,25 @@ async function boot() {
   applyI18n();
   render();
 
-  /* Restore the last episode, paused. Browsers block autoplay before a user
-     gesture, so playback starts on the first click rather than failing. */
-  if (store.last && BY_ID[store.last.id]) {
-    loadEpisode(BY_ID[store.last.id], store.last.part, store.last.time, false);
-  } else {
-    document.body.classList.add("no-player");
-  }
-
-  setupInstall();
-  renderNetBanner();
-  pruneAudioCache().catch(() => {});
+  /* One at a time, so a failure in one cannot skip the rest. */
+  [restoreLast, setupInstall, renderNetBanner,
+   () => { pruneAudioCache().catch(() => {}); }].forEach((step) => {
+    try { step(); } catch (e) { console.error(e); }
+  });
 
   if (json.warnings && json.warnings.length) {
     console.warn("index.json warnings:", json.warnings);
   }
+}
+
+/* Put the last episode back on screen, paused and without saving anything.
+   Browsers block autoplay before a user gesture, so playback starts on the
+   first click rather than failing. A finished episode is not brought back. */
+function restoreLast() {
+  const last = store.last;
+  const ep = last && BY_ID[last.id];
+  if (ep && !finished(ep.id)) loadEpisode(ep, last.part, last.time, false, true);
+  else document.body.classList.add("no-player");
 }
 
 document.addEventListener("DOMContentLoaded", boot);

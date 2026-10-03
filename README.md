@@ -96,7 +96,10 @@ cannot be parsed — a missing part, non-contiguous numbering, an unreadable nam
 | `TLS_CERT` / `TLS_KEY` | unset | serve HTTPS directly |
 
 `serve.py` also takes `--root`, `--host`, `--port`, `--cert`, `--key`.
-`build_index.py` takes `--root`, `--out`, `--no-durations`, `--jobs`.
+`build_index.py` takes `--root`, `--out`, `--no-durations`, `--jobs`, and
+`--allow-empty`. The index is replaced in one step, so a rebuild on a running
+server is safe, and a scan that finds no episodes (an archive mount that is
+briefly missing) keeps the previous index unless `--allow-empty` is given.
 
 ## Two things that will bite you
 
@@ -153,7 +156,7 @@ server-side state, no account, and no network calls beyond your own server.
 | File | Purpose |
 | --- | --- |
 | `build_index.py` | scans the archive, probes durations, writes `index.json` |
-| `serve.py` | Range-capable static server |
+| `serve.py` | Range-capable static server; serves only the app's own files and the mp3s, no directory listings |
 | `index.html` `styles.css` `app.js` `i18n.js` | the site |
 | `sw.js` | service worker: offline shell + range-aware audio cache |
 | `manifest.webmanifest` | PWA metadata |
