@@ -12,16 +12,25 @@ Greek podcast **Χριστιανισμός - Επιστήμη** (Christianity - 
 
 ## What it does
 
-- **Continuous playback** — parts play back-to-back (`1.mp3 → 2.mp3 → …`), then
-  the next episode starts automatically, continuing across season boundaries so
-  multi-part series play in order.
+- **Continuous playback** — parts play back-to-back (`1.mp3 → 2.mp3 → …`). At
+  the end of an episode playback stops with the next one ready; turn on
+  **autoplay** in the player to have it start by itself, across season
+  boundaries too.
+- **Series** — multi-part runs ("Εσχατολογικά - Μέρος 1ο … 7ο") are found from
+  the titles and listed in a **Series** view, with a button that plays the
+  series through in order and stops at its end.
+- **New episodes** — episodes added since your last visit get a badge, a count
+  on their season and a short list at the top until you play or dismiss them.
+- **Share a moment** — the share button gives a link such as
+  `…/_site/#e=2025-10-30&t=754` that opens that episode at that point, paused.
 - **Resume anywhere** — playback position, "continue listening", and recently
   played are remembered per browser.
 - **Listened tracking** — auto-marked when the last part finishes, manually
   togglable, with an "unheard only" filter.
-- **Search** — accent-insensitive Greek matching, so `εξελιξη` finds `Εξέλιξη`.
-  Several words match in any order, and dates count too: `εξελιξη 2009`,
-  `μαρτιου 2022` or `march 2022`.
+- **Search** — accent-insensitive Greek matching, so `εξελιξη` finds `Εξέλιξη`,
+  and Greeklish works too: `exelixi`, `ekseliksi`, `8eos`. Several words match
+  in any order, and dates count too: `εξελιξη 2009`, `martiou 2022` or
+  `march 2022`.
 - **Sleep timer** — stop after 15–60 minutes (with a short fade-out), or at the
   end of the current part or episode.
 - **Lock screen** — artwork, a scrubber, and play/pause/skip from the OS media
@@ -32,12 +41,16 @@ Greek podcast **Χριστιανισμός - Επιστήμη** (Christianity - 
   to return to the list.
 - **Greek / English interface** with an ΕΛ⁠/⁠EN toggle. Episode titles come from
   the folder names and are never translated.
+- **Light / dark theme** — follows the device, or set it with the button in
+  the header.
 - **Installable (PWA)** — full screen, its own home-screen icon, works offline.
 - **Offline caching** — the episode you are listening to is stored on the
   device, so playback survives a tunnel or a dead spot. Saved episodes carry a
   cloud mark in the list.
 - Scrubbing, ±15 s, part/episode skip, playback speed, OS media keys, and a
   mobile-friendly layout.
+- **Keyboard** — Space or K play/pause, ←/→ ±15 s, Shift+←/→ part,
+  Shift+P/N episode, `/` search; press `?` for the list.
 
 ## Run it
 

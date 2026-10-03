@@ -30,6 +30,7 @@ const strings = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string"
 
 const CLEAN = {
   lang: (v) => (v === "en" ? "en" : "el"),
+  theme: (v) => (v === "light" || v === "dark" ? v : "auto"),
   progress: (v) => {                   // id -> {part, time, updated}
     const out = {};
     if (isObj(v)) Object.keys(v).forEach((id) => {
@@ -45,22 +46,27 @@ const CLEAN = {
     if (isObj(v)) Object.keys(v).forEach((id) => { if (v[id] === true) out[id] = true; });
     return out;
   },
-  last: (v) => (isObj(v) && typeof v.id === "string" ? {   // {id, part, time}
+  last: (v) => (isObj(v) && typeof v.id === "string" ? {   // {id, part, time, series?}
     id: v.id,
     part: Number.isInteger(v.part) && v.part >= 0 ? v.part : 0,
     time: isNum(v.time) && v.time >= 0 ? v.time : 0,
+    series: typeof v.series === "string" ? v.series : undefined,   // playing a series through
   } : null),
   recent: strings,                     // [id, ...] most recent first
   cachedEps: strings,                  // ids held in the audio cache, MRU first
+  seen: strings,                       // ids no longer shown as new
   ui: (v) => {
     const u = isObj(v) ? v : {};
     return {
       sort: u.sort === "oldest" ? "oldest" : "newest",
       unheardOnly: u.unheardOnly === true,
+      view: u.view === "series" ? "series" : "seasons",
       open: Array.isArray(u.open) ? u.open.filter(Number.isInteger) : [],  // season numbers
+      openSeries: strings(u.openSeries),                                    // series ids
       volume: isNum(u.volume) ? Math.max(0, Math.min(1, u.volume)) : 1,
       speed: SPEEDS.indexOf(u.speed) !== -1 ? u.speed : 1,
       offlineCache: u.offlineCache !== false,
+      autoplay: u.autoplay === true,   // off unless the listener turns it on
     };
   },
 };
@@ -119,12 +125,19 @@ let SEASONS = [];          // chronological, season 1 .. N
 let FLAT = [];             // every episode, chronological across the archive
 const BY_ID = Object.create(null);
 
-/* Autoplay and the prev/next episode buttons both walk FLAT, so a season's
-   last episode continues into the next season instead of dead-ending. */
+/* The series being played through, if any (see playSeries). */
+let queue = null;
+
+/* The episode before or after: within the series being played through, else
+   across the whole archive, so a season's last episode continues into the
+   next season instead of dead-ending. */
 function neighbour(ep, delta) {
+  const q = queue ? queue.eps.indexOf(ep) : -1;
+  if (q !== -1 && q + delta >= 0 && q + delta < queue.eps.length) return queue.eps[q + delta];
   const i = ep._i + delta;
   return (i >= 0 && i < FLAT.length) ? FLAT[i] : null;
 }
+const inQueue = (ep) => !!(queue && ep && queue.eps.indexOf(ep) !== -1);
 
 function epTotal(ep) {
   if (ep.totalDur) return ep.totalDur;
@@ -146,6 +159,16 @@ function setListened(id, on) {
   update("listened", (l) => { if (on) l[id] = true; else delete l[id]; });
 }
 
+/* New: arrived since this browser first opened the app, and not yet
+   played, marked as listened or dismissed. */
+let SEEN = new Set(store.seen);
+const isNew = (id) => !SEEN.has(id) && !isListened(id);
+
+function markSeen(ids) {
+  update("seen", (s) => s.concat(ids.filter((id) => s.indexOf(id) === -1)));
+  SEEN = new Set(store.seen);
+}
+
 /* Where an episode picks up: its saved position, else the start. */
 function resumeAt(ep) {
   const p = store.progress[ep.id];
@@ -157,6 +180,83 @@ function seasonLabel(s) {
 }
 function epDate(ep) {
   return store.lang === "el" ? ep.dateLabel : (ep.dateLabelEn || ep.dateLabel);
+}
+
+/* ----------------------------------------------------------------- series
+
+   Runs of episodes titled "<name> - Μέρος 1ο", "… Μέρος 2ο", … (also
+   "Μέρος Α'" and "(2ο μέρος)"). Found from the titles when the index loads,
+   so a new part joins its series with nothing to maintain. */
+
+let SERIES = [];                            // oldest first
+const SERIES_BY_ID = Object.create(null);   // the first episode's id -> series
+const SERIES_OF = Object.create(null);      // episode id -> series
+
+/* On the folded title (so "μεροσ": ς is folded to σ). Group 1 is the
+   name, then the part's number. */
+const PART_RE = new RegExp("^(.*?)[\\s'\"«»\\-–—:,.]*(?:" +
+  "μεροσ\\s*(\\d+)\\s*ο?(?![α-ω])" +       // Μέρος 2ο, Μέρος 2 ο
+  "|μεροσ\\s*([α-θ])['΄’](?![α-ω])" +       // Μέρος Β'
+  "|\\((\\d+)\\s*ο\\s*μεροσ\\))");      // (2ο μέρος)
+const GREEK_ORD = "αβγδεζηθ";
+const DAY = 86400000;
+
+/* What two titles of one series have in common: the name, without quotes
+   and punctuation. */
+const seriesKey = (norm) =>
+  norm.replace(/['"«»‘’“”΄]/g, "").replace(/[\s\-–—:,.;]+/g, " ").trim();
+
+function findSeries() {
+  const runs = [];
+  for (const ep of FLAT) {
+    const m = PART_RE.exec(ep._norm);
+    if (!m) continue;
+    const key = seriesKey(m[1]);
+    if (key.length < 6) continue;
+    const n = m[2] ? +m[2] : m[3] ? GREEK_ORD.indexOf(m[3]) + 1 : +m[4];
+    const at = Date.parse(ep.date) || 0;
+    const name = ep._cps.slice(0, m[1].length).join("")
+      .replace(/^['"«‘“\s]+|['"»’”\s\-–—:,]+$/g, "");
+
+    /* The same name (or one that starts the other: "… - Μέθοδοι εναλλακτικής
+       ιατρικής Μέρος 2ο" then "… - Μέρος 3ο"), a higher number and not years
+       apart. A new "Μέρος 1ο" starts a new series, so a topic revisited years
+       later ("Κατακλυσμός", 2013 and 2020) stays two. */
+    let run = null;
+    for (let i = runs.length - 1; i >= 0 && !run; i--) {
+      const r = runs[i];
+      if ((r.key.startsWith(key) || key.startsWith(r.key)) &&
+          n > r.lastN && at - r.lastAt < 400 * DAY) run = r;
+    }
+    if (!run) {
+      run = { key: key, name: name, eps: [], lastN: 0, lastAt: 0 };
+      runs.push(run);
+      /* A series whose first part has no number of its own ("Η επίδραση
+         των smartphones στην ψυχοσωματική υγεία", then "… Μέρος 2ο"): the
+         episode just before, if it has the same name and is weeks away. */
+      const prev = FLAT[ep._i - 1];
+      if (n === 2 && prev && seriesKey(prev._norm).startsWith(key) &&
+          at - (Date.parse(prev.date) || 0) < 60 * DAY) run.eps.push(prev);
+    } else if (key.length < run.key.length) {
+      run.key = key;                               // the shorter, common name
+      run.name = name;
+    }
+    run.eps.push(ep);
+    run.lastN = n;
+    run.lastAt = at;
+  }
+
+  SERIES = runs.filter((r) => r.eps.length > 1).map((r) => {
+    const years = r.eps.map((e) => parseInt(e.date, 10)).filter(isFinite);
+    return {
+      id: r.eps[0].id, name: r.name, eps: r.eps,
+      yearStart: Math.min.apply(null, years), yearEnd: Math.max.apply(null, years),
+    };
+  });
+  for (const s of SERIES) {
+    SERIES_BY_ID[s.id] = s;
+    for (const ep of s.eps) SERIES_OF[ep.id] = s;
+  }
 }
 
 /* ------------------------------------------------------------------- i18n */
@@ -194,6 +294,8 @@ function applyI18n() {
 
   $("#sort-toggle").textContent =
     t(store.ui.sort === "newest" ? "sort.newest" : "sort.oldest");
+  renderAutoplay();
+  renderTheme();
   renderOfflineChip();
   renderNetBanner();
   labelSleepOptions();
@@ -204,19 +306,64 @@ function applyI18n() {
 
 /* ------------------------------------------------------------------ state */
 
-/* query: the normalised search text; terms: its words. Every word must match
-   the title or the date, in any order, so "εξελιξη 2009" works. */
+/* query: the normalised search text; terms: its words, each with the
+   patterns that find it. Every word must match the title or the date, in
+   any order, so "εξελιξη 2009" works. */
 const view = { query: "", terms: [], debounce: 0 };
+
+/* Greeklish: a word typed in Latin letters is also looked for as Greek, so
+   "exelixi", "ekseliksi" and "εξελιξη" all find Εξέλιξη. Each Latin letter
+   (or pair) stands for the Greek it is usually typed for; pairs also stay
+   open to being two letters, so "ks" finds κσ as well as ξ. Matched against
+   the folded title: lowercase, no accents, ς as σ. */
+const GREEKLISH = {
+  th: "θ", ps: "ψ", ks: "ξ", ch: "χ", kh: "χ", gh: "γ", dh: "δ", ph: "φ",
+  ou: "ου", ai: "αι|ε", ei: "ει|ι", oi: "οι|ι", mp: "μπ", nt: "ντ", gk: "γκ",
+  gg: "γγ", ng: "γγ|γκ", av: "αυ", ev: "ευ", af: "αυ", ef: "ευ",
+  a: "α", b: "β|μπ", c: "κ|σ", d: "δ|ντ", e: "ε|η|αι", f: "φ", g: "γ",
+  h: "η|χ", i: "ι|η|υ|ει|οι", j: "ζ|τζ", k: "κ", l: "λ", m: "μ", n: "ν",
+  o: "ο|ω", p: "π", q: "κ", r: "ρ", s: "σ", t: "τ", u: "υ|ου", v: "β|υ",
+  w: "ω|ου", x: "ξ|χ", y: "υ|ι|η", z: "ζ",
+  8: "8|θ", 3: "3|ξ",                            // "8eos"; still a digit in "3o"
+};
+const reEscape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function greeklish(word) {
+  if (!/[a-z]/.test(word)) return null;          // Greek or digits: as typed
+  let src = "";
+  for (let i = 0; i < word.length;) {
+    const two = word.substr(i, 2);
+    const one = word.charAt(i);
+    if (two.length === 2 && GREEKLISH[two]) {
+      const split = GREEKLISH[two.charAt(0)] && GREEKLISH[two.charAt(1)]
+        ? "|(?:" + GREEKLISH[two.charAt(0)] + ")(?:" + GREEKLISH[two.charAt(1)] + ")" : "";
+      src += "(?:" + GREEKLISH[two] + split + ")";
+      i += 2;
+    } else {
+      src += GREEKLISH[one] && /[a-z38]/.test(one) ? "(?:" + GREEKLISH[one] + ")" : reEscape(one);
+      i += 1;
+    }
+  }
+  return new RegExp(src, "g");
+}
 
 function setQuery(raw) {
   view.query = normalize(raw.trim());
-  view.terms = view.query.split(/\s+/).filter(Boolean);
+  view.terms = view.query.split(/\s+/).filter(Boolean)
+    .map((w) => ({ word: w, re: greeklish(w) }));
+}
+
+function termIn(term, norm) {
+  if (norm.indexOf(term.word) !== -1) return true;
+  if (!term.re) return false;
+  term.re.lastIndex = 0;
+  return term.re.test(norm);
 }
 
 function matches(ep) {
   if (store.ui.unheardOnly && isListened(ep.id)) return false;
-  for (const w of view.terms) {
-    if (ep._norm.indexOf(w) === -1 && ep._dateNorm.indexOf(w) === -1) return false;
+  for (const term of view.terms) {
+    if (!termIn(term, ep._norm) && !termIn(term, ep._dateNorm)) return false;
   }
   return true;
 }
@@ -228,9 +375,14 @@ function matches(ep) {
 function highlight(text, norm) {
   const frag = document.createDocumentFragment();
   const hits = [];
-  for (const w of view.terms) {
+  for (const term of view.terms) {
+    const w = term.word;
     for (let i = norm.indexOf(w); i !== -1; i = norm.indexOf(w, i + 1)) {
       hits.push([i, i + w.length]);
+    }
+    if (term.re) {
+      term.re.lastIndex = 0;
+      for (let m; (m = term.re.exec(norm));) hits.push([m.index, m.index + m[0].length]);
     }
   }
   if (hits.length === 0) {
@@ -292,6 +444,12 @@ function episodeRow(ep) {
 
   const title = document.createElement("span");
   title.className = "ep-title";
+  if (isNew(ep.id)) {
+    const badge = document.createElement("span");
+    badge.className = "new-badge";
+    badge.textContent = t("new.badge");
+    title.appendChild(badge);
+  }
   title.appendChild(highlight(ep.title, ep._norm));
   main.appendChild(title);
 
@@ -374,16 +532,33 @@ function focusedInList() {
   if (!el || !$("#seasons").contains(el)) return null;
   const row = el.closest(".ep");
   const sec = el.closest(".season");
-  const cls = ["ep-play", "ep-check"].filter((c) => el.classList.contains(c))[0];
-  return { id: row && row.dataset.id, cls: cls, season: sec && sec.dataset.num };
+  const cls = ["ep-play", "ep-check", "series-play"].filter((c) => el.classList.contains(c))[0];
+  return { id: row && row.dataset.id, cls: cls, group: sec && sec.dataset.key };
 }
 function refocus(f) {
   if (!f) return;
-  const row = f.id && f.cls &&
-    document.querySelector('.ep[data-id="' + cssEscape(f.id) + '"]');
+  const sec = f.group && document.querySelector('.season[data-key="' + cssEscape(f.group) + '"]');
+  const row = f.id && f.cls && sec &&
+    sec.querySelector('.ep[data-id="' + cssEscape(f.id) + '"]');
   const el = (row && row.querySelector("." + f.cls)) ||
-    (f.season && document.querySelector('.season[data-num="' + f.season + '"] .season-head'));
+    (sec && !f.id && f.cls && sec.querySelector("." + f.cls)) ||
+    (sec && sec.querySelector(".season-head"));
   if (el) el.focus({ preventScroll: true });
+}
+
+/* What the list is made of: seasons, or series of episodes. Each group
+   keeps its own open/closed state in the matching ui list. */
+function listGroups() {
+  if (store.ui.view === "series") {
+    return SERIES.map((s) => ({
+      key: "r:" + s.id, id: s.id, openList: store.ui.openSeries, series: s,
+      label: s.name, yearStart: s.yearStart, yearEnd: s.yearEnd, episodes: s.eps,
+    }));
+  }
+  return SEASONS.map((s) => ({
+    key: "s:" + s.num, id: s.num, openList: store.ui.open,
+    label: seasonLabel(s), yearStart: s.yearStart, yearEnd: s.yearEnd, episodes: s.episodes,
+  }));
 }
 
 function renderSeasons() {
@@ -392,23 +567,25 @@ function renderSeasons() {
   host.textContent = "";
   const searching = !!view.query;
   document.body.classList.toggle("searching", searching);
+  const seriesView = store.ui.view === "series";
   let shown = 0;
 
-  // Seasons follow the same newest/oldest toggle as the episodes inside them.
-  // Copy before reversing: SEASONS stays index-ordered for SEASONS[ep.season-1].
-  const seasons = store.ui.sort === "newest" ? SEASONS.slice().reverse() : SEASONS;
+  // Groups follow the same newest/oldest toggle as the episodes inside them;
+  // a series still lists its parts in order, 1 to N.
+  const all = listGroups();
+  const groups = store.ui.sort === "newest" ? all.reverse() : all;
 
-  for (const s of seasons) {
-    const eps = s.episodes.filter(matches);
+  for (const g of groups) {
+    const eps = g.episodes.filter(matches);
     shown += eps.length;
     if ((searching || store.ui.unheardOnly) && eps.length === 0) continue;
 
-    const open = searching ? true : store.ui.open.indexOf(s.num) !== -1;
+    const open = searching ? true : g.openList.indexOf(g.id) !== -1;
 
     const sec = document.createElement("section");
-    sec.className = "season";
+    sec.className = "season" + (g.series ? " series" : "");
     sec.dataset.open = String(open);
-    sec.dataset.num = s.num;
+    sec.dataset.key = g.key;
 
     const head = document.createElement("button");
     head.type = "button";
@@ -418,53 +595,62 @@ function renderSeasons() {
 
     const name = document.createElement("span");
     name.className = "season-name";
-    name.textContent = seasonLabel(s);
-    if (s.yearStart) {
+    name.textContent = g.label;
+    if (g.yearStart) {
       const yr = document.createElement("span");
       yr.className = "season-years";
-      yr.textContent = "  " + (s.yearStart === s.yearEnd
-        ? s.yearStart : s.yearStart + "–" + s.yearEnd);
+      yr.textContent = "  " + (g.yearStart === g.yearEnd
+        ? g.yearStart : g.yearStart + "–" + g.yearEnd);
       name.appendChild(yr);
     }
     head.appendChild(name);
 
     const meta = document.createElement("span");
     meta.className = "season-meta";
-    const unheard = s.episodes.filter((e) => !isListened(e.id)).length;
+    const unheard = g.episodes.filter((e) => !isListened(e.id)).length;
+    const fresh = g.episodes.filter((e) => isNew(e.id)).length;
+    if (fresh > 0) {
+      const pill = document.createElement("span");
+      pill.className = "new-pill";
+      pill.textContent = t("season.new", { n: fresh });
+      meta.appendChild(pill);
+    }
     if (unheard === 0) {
-      meta.textContent = t("season.allListened");
+      meta.appendChild(document.createTextNode(t("season.allListened")));
     } else {
       const count = document.createElement("span");
       count.className = "season-count";               // hidden on phones
-      count.textContent = t("season.episodes", { n: s.episodes.length }) + " ";
+      count.textContent = t("season.episodes", { n: g.episodes.length }) + " ";
       meta.appendChild(count);
-      const pill = document.createElement("span");
-      pill.className = "unheard-pill";
-      pill.textContent = t("season.unheard", { n: unheard });
-      meta.appendChild(pill);
+      if (fresh < unheard) {
+        const pill = document.createElement("span");
+        pill.className = "unheard-pill";
+        pill.textContent = t("season.unheard", { n: unheard });
+        meta.appendChild(pill);
+      }
     }
     head.appendChild(meta);
 
-    const heard = s.episodes.length - unheard;
+    const heard = g.episodes.length - unheard;
     if (heard > 0) {
       const bar = document.createElement("span");
       bar.className = "season-bar";
       bar.setAttribute("role", "img");
       bar.setAttribute("aria-label",
-        t("season.progress", { done: heard, total: s.episodes.length }));
+        t("season.progress", { done: heard, total: g.episodes.length }));
       bar.innerHTML = '<i style="width:' +
-        ((heard / s.episodes.length) * 100).toFixed(1) + '%"></i>';
+        ((heard / g.episodes.length) * 100).toFixed(1) + '%"></i>';
       head.appendChild(bar);
     }
 
     head.addEventListener("click", () => {
       if (view.query) return;                      // stays open while searching
-      const i = store.ui.open.indexOf(s.num);
-      if (i === -1) store.ui.open.push(s.num); else store.ui.open.splice(i, 1);
+      const i = g.openList.indexOf(g.id);
+      if (i === -1) g.openList.push(g.id); else g.openList.splice(i, 1);
       saveUI();
       render();
     });
-    /* A heading, so screen readers can jump from season to season. */
+    /* A heading, so screen readers can jump from group to group. */
     const h = document.createElement("h2");
     h.className = "season-title";
     h.appendChild(head);
@@ -473,7 +659,8 @@ function renderSeasons() {
     if (open) {
       const body = document.createElement("div");
       body.className = "season-body";
-      const ordered = store.ui.sort === "newest" ? eps.slice().reverse() : eps;
+      if (g.series) body.appendChild(seriesActions(g.series));
+      const ordered = store.ui.sort === "newest" && !seriesView ? eps.slice().reverse() : eps;
       for (const ep of ordered) body.appendChild(episodeRow(ep));
       sec.appendChild(body);
     }
@@ -566,8 +753,94 @@ function renderRecent() {
   });
 }
 
+/* Episodes added since the last visit, newest first. Playing one, marking
+   it listened or Dismiss takes it off; the rest of the list keeps its
+   badges until then. */
+const NEW_SHOWN = 5;
+function renderNew() {
+  const sec = $("#new-section");
+  const eps = FLAT.filter((e) => isNew(e.id)).reverse();
+  if (eps.length === 0) { sec.hidden = true; return; }
+  sec.hidden = false;
+
+  const list = $("#new-list");
+  list.textContent = "";
+  eps.slice(0, NEW_SHOWN).forEach((ep) => {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "recent-btn";
+    const ttl = document.createElement("span");
+    ttl.className = "rt";
+    ttl.textContent = ep.title;
+    const sm = document.createElement("span");
+    sm.className = "rs";
+    sm.textContent = epDate(ep);
+    b.appendChild(ttl); b.appendChild(sm);
+    b.addEventListener("click", () => {
+      const p = resumeAt(ep);
+      loadEpisode(ep, p.part, p.time, true);
+    });
+    li.appendChild(b);
+    list.appendChild(li);
+  });
+  if (eps.length > NEW_SHOWN) {
+    const li = document.createElement("li");
+    li.className = "new-more";
+    li.textContent = t("new.more", { n: eps.length - NEW_SHOWN });
+    list.appendChild(li);
+  }
+}
+
+/* The bar at the top of an open series: play it through from the first
+   episode not yet finished. */
+function seriesActions(series) {
+  const bar = document.createElement("div");
+  bar.className = "series-actions";
+  const next = seriesStart(series);
+  const k = series.eps.indexOf(next);
+  const fresh = series.eps.every((e) => !isListened(e.id) && !store.progress[e.id]);
+  const done = series.eps.every((e) => finished(e.id));
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn-primary series-play";
+  btn.innerHTML = SVG_PLAY;
+  btn.appendChild(document.createTextNode(
+    t(done ? "series.again" : fresh ? "series.play" : "series.continue")));
+  btn.title = t("series.hint");
+  btn.addEventListener("click", () => playSeries(series));
+  bar.appendChild(btn);
+
+  if (!fresh && !done) {
+    const note = document.createElement("span");
+    note.className = "series-note";
+    note.textContent = t("series.at", { n: k + 1, total: series.eps.length });
+    bar.appendChild(note);
+  }
+  return bar;
+}
+
+/* Where a series picks up: the first episode not finished, else (all heard)
+   the first one again. */
+function seriesStart(series) {
+  return series.eps.filter((e) => !finished(e.id))[0] || series.eps[0];
+}
+
+function playSeries(series) {
+  const ep = seriesStart(series);
+  queue = series;
+  if (cur && cur.ep === ep) {
+    if (!isPlaying()) play();
+    return;
+  }
+  const p = resumeAt(ep);
+  loadEpisode(ep, p.part, p.time, true);
+}
+
 function render() {
   renderContinue();
+  renderNew();
   renderRecent();
   renderSeasons();
 }
@@ -600,6 +873,7 @@ function takeOver() { dirty = true; handedOff = false; }
    startup, or following another tab. */
 function loadEpisode(ep, part, time, autoplay, quiet) {
   if (!ep) return;
+  if (!inQueue(ep)) queue = null;                  // left the series
   part = Math.max(0, Math.min(part | 0, ep.parts.length - 1));
   cur = { ep: ep, part: part };
   pendingSeek = time || 0;
@@ -617,10 +891,7 @@ function loadEpisode(ep, part, time, autoplay, quiet) {
 
   handedOff = false;
   dirty = !quiet;
-  if (!quiet) {
-    noteRecent(ep.id);
-    persistPosition(true);
-  }
+  if (!quiet) persistPosition(true);   // "recent" waits until it actually plays
 
   /* Saving for offline starts once the episode actually plays (see the play
      event), not when it is merely loaded: putting last session's episode
@@ -682,8 +953,15 @@ function followOtherTab(autoplay) {
   const last = store.last;
   const ep = last && BY_ID[last.id];
   if (!ep) return false;
+  queue = queueOf(last, ep);
   loadEpisode(ep, last.part, last.time, autoplay, !autoplay);
   return true;
+}
+
+/* The series a saved position was playing through, if it still holds it. */
+function queueOf(last, ep) {
+  const s = last && last.series && SERIES_BY_ID[last.series];
+  return s && s.eps.indexOf(ep) !== -1 ? s : null;
 }
 
 function setLoading(on) {
@@ -727,8 +1005,12 @@ function onEnded() {
   update("progress", (p) => { delete p[ep.id]; });
   const nx = neighbour(ep, 1);
   if (nx) {
+    /* The next episode starts by itself only with autoplay on, or inside a
+       series being played through. Otherwise it is put in place, paused,
+       so the next Play carries on from there. */
+    const go = !stop && (store.ui.autoplay || inQueue(nx));
     const p = resumeAt(nx);                        // it may have been started before
-    loadEpisode(nx, p.part, p.time, !stop);
+    loadEpisode(nx, p.part, p.time, go);
     return;
   }
   /* Caught up with the newest episode: there is nothing to continue, so the
@@ -818,8 +1100,12 @@ function persistPosition(force) {
   const time = audio.error ? lastGood
     : pendingSeek > 0 ? pendingSeek : (audio.currentTime || 0);
   const id = cur.ep.id, part = cur.part;
-  update("progress", (p) => { p[id] = { part: part, time: time, updated: now }; });
-  store.last = { id: id, part: part, time: time };
+  /* Merely put in place (autoplay off) is not a start: no "part 1/4" mark
+     on an episode nobody has played yet. */
+  if (part > 0 || time > 0 || store.progress[id]) {
+    update("progress", (p) => { p[id] = { part: part, time: time, updated: now }; });
+  }
+  store.last = { id: id, part: part, time: time, series: queue ? queue.id : undefined };
   saveLast();
   renderContinue();   // keep the "continue listening" card in step with playback
 }
@@ -974,9 +1260,13 @@ function updatePositionState() {
 
 /* ------------------------------------------------------------------ wire */
 
+function allGroupsOpen() {
+  const groups = listGroups();
+  return groups.length > 0 && groups.every((g) => g.openList.indexOf(g.id) !== -1);
+}
+
 function updateExpandLabel() {
-  const allOpen = store.ui.open.length >= SEASONS.length && SEASONS.length > 0;
-  $("#expand-toggle").textContent = t(allOpen ? "nav.collapseAll" : "nav.expandAll");
+  $("#expand-toggle").textContent = t(allGroupsOpen() ? "nav.collapseAll" : "nav.expandAll");
 }
 
 function wire() {
@@ -1022,11 +1312,25 @@ function wire() {
     renderSeasons();
   });
   $("#expand-toggle").addEventListener("click", () => {
-    const allOpen = store.ui.open.length >= SEASONS.length;
-    store.ui.open = allOpen ? [] : SEASONS.map((s) => s.num);
+    const open = allGroupsOpen() ? [] : listGroups().map((g) => g.id);
+    if (store.ui.view === "series") store.ui.openSeries = open;
+    else store.ui.open = open;
     saveUI();
     updateExpandLabel();
     render();
+  });
+  $("#view-series").addEventListener("click", (e) => {
+    store.ui.view = store.ui.view === "series" ? "seasons" : "series";
+    e.currentTarget.setAttribute("aria-pressed", String(store.ui.view === "series"));
+    saveUI();
+    updateExpandLabel();
+    renderSeasons();
+  });
+  $("#btn-new-dismiss").addEventListener("click", () => {
+    markSeen(FLAT.filter((ep) => isNew(ep.id)).map((ep) => ep.id));
+    render();
+    const h = $("#seasons .season-head");                 // the panel is gone
+    if (h) h.focus({ preventScroll: true });
   });
 
   /* transport */
@@ -1043,6 +1347,27 @@ function wire() {
     updatePlayerText();
     render();
   });
+  $("#btn-autoplay").addEventListener("click", () => {
+    store.ui.autoplay = !store.ui.autoplay;
+    saveUI();
+    renderAutoplay();
+  });
+  $("#btn-share").addEventListener("click", shareLink);
+
+  /* header */
+  $("#btn-theme").addEventListener("click", () => {
+    const order = ["auto", "light", "dark"];
+    store.theme = order[(order.indexOf(store.theme) + 1) % order.length];
+    write("theme", store.theme);
+    applyTheme();
+  });
+  const keys = $("#keys-dialog");
+  $("#btn-keys").addEventListener("click", openKeys);
+  $("#btn-keys-close").addEventListener("click", () => keys.close());
+  keys.addEventListener("click", (e) => { if (e.target === keys) keys.close(); });  // backdrop
+
+  /* a shared link opened while the app is already open */
+  window.addEventListener("hashchange", () => { if (DATA) openFromHash(); });
 
   /* offline caching */
   const off = $("#btn-offline");
@@ -1129,6 +1454,10 @@ function wire() {
   audio.addEventListener("play", () => {
     takeOver();
     noteRecent(cur.ep.id);        // a restored episode only counts once played
+    if (isNew(cur.ep.id)) {       // ...and stops being new
+      markSeen([cur.ep.id]);
+      render();
+    }
     schedulePrefetch();
     updatePlayerText(); markPlayingRow(); updatePositionState();
   });
@@ -1163,18 +1492,32 @@ function wire() {
 
   /* keyboard */
   document.addEventListener("keydown", (e) => {
+    if (keys.open) return;                         // the dialog handles its own Escape
     if (e.key === "Escape" && npIsOpen()) { e.preventDefault(); closeNowPlaying(); return; }
     const tag = (e.target.tagName || "").toLowerCase();
     if (tag === "input" || tag === "select" || tag === "textarea") return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.code === "Space" && keyboardFocusedButton(e.target)) return;  // let it press
-    if (e.code === "Space") { e.preventDefault(); togglePlay(); }
+    if (e.code === "Space" || (e.code === "KeyK" && !e.shiftKey)) {
+      e.preventDefault();
+      togglePlay();
+    }
     else if (e.key === "ArrowLeft") {
       e.preventDefault();
       if (e.shiftKey) goPart(-1); else skip(-15);
     } else if (e.key === "ArrowRight") {
       e.preventDefault();
       if (e.shiftKey) goPart(1); else skip(15);
+    } else if (e.shiftKey && (e.code === "KeyN" || e.code === "KeyP")) {
+      e.preventDefault();
+      goEpisode(e.code === "KeyN" ? 1 : -1);
+    } else if (e.key === "/") {
+      e.preventDefault();
+      if (npIsOpen()) closeNowPlaying();
+      $("#search").focus();
+    } else if (e.key === "?") {
+      e.preventDefault();
+      openKeys();
     }
   });
 
@@ -1233,11 +1576,16 @@ function wire() {
 function onStorage(e) {
   if (e.storageArea !== localStorage) return;
   const all = e.key === null;                      // storage was cleared
-  const shared = ["listened", "progress", "recent", "cachedEps", "last"]
+  if (all || e.key === K + "theme") {             // follows the other tab's choice
+    store.theme = load("theme");
+    applyTheme();
+  }
+  const shared = ["listened", "progress", "recent", "cachedEps", "seen", "last"]
     .filter((k) => all || e.key === K + k);
   if (shared.length === 0) return;
   shared.forEach((k) => {
-    if (k !== "last") store[k] = load(k);
+    if (k === "seen") { store.seen = load("seen"); SEEN = new Set(store.seen); }
+    else if (k !== "last") store[k] = load(k);
     else if (!isPlaying()) {                       // while playing, ours is newer
       store.last = load("last");
       handedOff = true;
@@ -1285,6 +1633,172 @@ function keyboardFocusedButton(el) {
 
 function cssEscape(s) {
   return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/["\\]/g, "\\$&");
+}
+
+/* ================================================================ theme
+
+   "auto" follows the device; "light" and "dark" set data-theme on <html>,
+   which styles.css gives precedence over the device's preference. The
+   inline script in index.html applies a saved choice before first paint. */
+
+const THEME_BG = { light: "#f7f7f5", dark: "#16161a" };   // as --bg in styles.css
+
+function applyTheme() {
+  const root = document.documentElement;
+  if (store.theme === "auto") delete root.dataset.theme;
+  else root.dataset.theme = store.theme;
+  syncThemeColor();
+  renderTheme();
+}
+
+function renderTheme() {
+  const b = $("#btn-theme");
+  b.dataset.mode = store.theme;
+  const lbl = t("theme." + store.theme);
+  b.setAttribute("aria-label", lbl);
+  b.title = lbl + " — " + t("theme.change");
+}
+
+/* The browser bar: the sheet's top while the full-screen player is open,
+   else the page background of the chosen theme, else per the media query
+   each <meta> carries. */
+function syncThemeColor() {
+  const top = npIsOpen()
+    ? getComputedStyle(document.documentElement).getPropertyValue("--np-top").trim() : "";
+  $$('meta[name="theme-color"]').forEach((m) => {
+    if (!m.dataset.base) m.dataset.base = m.content;
+    m.content = top || THEME_BG[store.theme] || m.dataset.base;
+  });
+}
+
+/* ============================================================== autoplay */
+
+function renderAutoplay() {
+  const b = $("#btn-autoplay");
+  const on = store.ui.autoplay;
+  const lbl = t(on ? "autoplay.on" : "autoplay.off");
+  b.setAttribute("aria-pressed", String(on));
+  b.setAttribute("aria-label", lbl);
+  b.title = lbl;
+}
+
+/* ================================================================= share
+
+   A link to an episode at a moment: …/_site/#e=2025-10-30&t=754, the
+   episode's date and the seconds into it. Dates are one per episode, so
+   the link stays short; should two ever share one, the full id is used. */
+
+const BY_DATE = Object.create(null);    // date -> episode, or null if not unique
+
+function linkFor(ep, at) {
+  const url = new URL("./", location.href);
+  url.hash = (BY_DATE[ep.date] === ep ? "e=" + ep.date : "id=" + encodeURIComponent(ep.id)) +
+    (at >= 5 ? "&t=" + Math.floor(at) : "");
+  return url.href;
+}
+
+async function shareLink() {
+  if (!cur) return;
+  const ep = cur.ep;
+  const inPart = pendingSeek > 0 ? pendingSeek : (audio.currentTime || 0);
+  const at = elapsedBefore(ep, cur.part) + inPart;
+  const url = linkFor(ep, at);
+  const text = at >= 5 ? ep.title + " (" + partTime(ep, cur.part, inPart) + ")" : ep.title;
+
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: ep.title, text: text, url: url });
+      return;
+    } catch (e) {
+      if (e && e.name === "AbortError") return;    // closed the share sheet
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast(t("share.copied"));
+  } catch (e) {
+    window.prompt(t("share.copy"), url);           // no clipboard over plain http
+  }
+}
+
+/* "part 3/4, 7:31": the player counts time per part, so a link says so too. */
+function partTime(ep, part, time) {
+  return t("share.at", { part: part + 1, total: ep.parts.length, time: fmtTime(time) });
+}
+
+/* Seconds into an episode -> the part and the time within it. */
+function positionAt(ep, at) {
+  for (let i = 0; i < ep.parts.length; i++) {
+    const d = ep.parts[i].dur;
+    if (!d || at < d || i === ep.parts.length - 1) {
+      return { part: i, time: d ? Math.min(at, d) : at };
+    }
+    at -= d;
+  }
+  return { part: 0, time: 0 };
+}
+
+/* Opens the episode a shared link points to, paused at its moment; Play
+   starts it. Nothing is saved until then, so a link only looked at leaves
+   the listener's own place alone. */
+function openFromHash() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  const date = h.get("e"), id = h.get("id");
+  if (!date && !id) return false;
+  history.replaceState(history.state, "", location.pathname + location.search);
+  const ep = id ? BY_ID[id] : BY_DATE[date];
+  if (!ep) { showToast(t("share.notFound")); return false; }
+
+  const at = Math.max(0, parseInt(h.get("t"), 10) || 0);
+  const pos = positionAt(ep, at);
+  queue = null;
+  loadEpisode(ep, pos.part, pos.time, false, true);
+  revealEpisode(ep);
+  showToast(at >= 5 ? t("share.opened", { at: partTime(ep, pos.part, pos.time) })
+    : t("share.openedStart"));
+  return true;
+}
+
+/* Scrolls the list to an episode's row, opening its group first. */
+function revealEpisode(ep) {
+  if (view.query) {
+    $("#search").value = "";
+    $("#search-clear").hidden = true;
+    setQuery("");
+  }
+  if (store.ui.unheardOnly && isListened(ep.id)) {
+    store.ui.unheardOnly = false;
+    $("#filter-unheard").setAttribute("aria-pressed", "false");
+    $("#filter-unheard").textContent = t("filter.unheard");
+  }
+  const series = SERIES_OF[ep.id];
+  if (store.ui.view === "series" && !series) {
+    store.ui.view = "seasons";
+    $("#view-series").setAttribute("aria-pressed", "false");
+  }
+  if (store.ui.view === "series") {
+    if (store.ui.openSeries.indexOf(series.id) === -1) store.ui.openSeries.push(series.id);
+  } else if (store.ui.open.indexOf(ep.season) === -1) {
+    store.ui.open.push(ep.season);
+  }
+  saveUI();
+  updateExpandLabel();
+  render();
+  const row = document.querySelector('#seasons .ep[data-id="' + cssEscape(ep.id) + '"]');
+  if (row) {
+    row.scrollIntoView({ block: "center", behavior: REDUCED_MOTION.matches ? "auto" : "smooth" });
+    row.classList.add("flash");
+    setTimeout(() => row.classList.remove("flash"), 2400);
+  }
+}
+
+/* ============================================================ shortcuts */
+
+function openKeys() {
+  const d = $("#keys-dialog");
+  if (d.open) return;
+  if (npIsOpen()) closeNowPlaying();
+  d.showModal();
 }
 
 /* ============================================================ now playing
@@ -1357,11 +1871,7 @@ function setBehindSheet(open) {
   document.body.classList.toggle("np-open", open);
   $$("body > header, body > main").forEach((el) => { el.inert = open; });
   $("#btn-np-open").setAttribute("aria-expanded", String(open));
-  const top = getComputedStyle(document.documentElement).getPropertyValue("--np-top").trim();
-  $$('meta[name="theme-color"]').forEach((m) => {
-    if (!m.dataset.base) m.dataset.base = m.content;
-    m.content = open && top ? top : m.dataset.base;
-  });
+  syncThemeColor();
 }
 
 function wireNowPlaying() {
@@ -1599,7 +2109,7 @@ async function prefetchEpisode(ep, fromPart) {
      is deliberately not recorded in cachedEps: that list holds whole episodes
      only, and a one-part lookahead must not push one of those out. */
   const nx = neighbour(ep, 1);
-  if (nx && !ctl.signal.aborted) {
+  if (nx && (store.ui.autoplay || inQueue(nx)) && !ctl.signal.aborted) {
     try {
       if (!(await cache.match(pathOf(nx.parts[0].url)))) {
         await cachePart(cache, nx.parts[0], ctl.signal, null, partRate(nx.parts[0]));
@@ -1801,6 +2311,7 @@ function registerSW() {
 
 async function boot() {
   wire();
+  applyTheme();
   applyI18n();
   registerSW();
 
@@ -1831,18 +2342,30 @@ async function boot() {
       ep._i = FLAT.length;
       FLAT.push(ep);
       BY_ID[ep.id] = ep;
+      if (ep.date) BY_DATE[ep.date] = ep.date in BY_DATE ? null : ep;
     }
   }
+  findSeries();
+
+  /* The first time, everything already here counts as seen: "new" means
+     added since this browser started using the app. */
+  if (read("seen", null) === null) {
+    store.seen = FLAT.map((ep) => ep.id);
+    write("seen", store.seen);
+  }
+  SEEN = new Set(store.seen);
 
   $("#status").hidden = true;
   $("#filter-unheard").setAttribute("aria-pressed", String(store.ui.unheardOnly));
   $("#filter-unheard").textContent =
     t(store.ui.unheardOnly ? "filter.unheardOn" : "filter.unheard");
+  $("#view-series").setAttribute("aria-pressed", String(store.ui.view === "series"));
   applyI18n();
   render();
 
-  /* One at a time, so a failure in one cannot skip the rest. */
-  [restoreLast, setupInstall, renderNetBanner,
+  /* One at a time, so a failure in one cannot skip the rest. A shared link
+     takes the place of the last episode. */
+  [() => { if (!openFromHash()) restoreLast(); }, setupInstall, renderNetBanner,
    () => { pruneAudioCache().catch(() => {}); }].forEach((step) => {
     try { step(); } catch (e) { console.error(e); }
   });
@@ -1858,8 +2381,12 @@ async function boot() {
 function restoreLast() {
   const last = store.last;
   const ep = last && BY_ID[last.id];
-  if (ep && !finished(ep.id)) loadEpisode(ep, last.part, last.time, false, true);
-  else document.body.classList.add("no-player");
+  if (ep && !finished(ep.id)) {
+    queue = queueOf(last, ep);
+    loadEpisode(ep, last.part, last.time, false, true);
+  } else {
+    document.body.classList.add("no-player");
+  }
 }
 
 document.addEventListener("DOMContentLoaded", boot);

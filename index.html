@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>Χριστιανισμός - Επιστήμη</title>
+<script>
+  /* The chosen theme, applied before the page first paints (app.js loads
+     too late to avoid a flash of the other one). */
+  try {
+    var th = JSON.parse(localStorage.getItem("cs:v1:theme"));
+    if (th === "light" || th === "dark") document.documentElement.dataset.theme = th;
+  } catch (e) {}
+</script>
 <link rel="stylesheet" href="styles.css">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
@@ -24,9 +32,20 @@
       <h1 data-i18n="app.title">Χριστιανισμός - Επιστήμη</h1>
       <p class="subtitle" id="subtitle"></p>
     </div>
-    <div class="lang-switch" role="group" data-i18n-aria-label="lang.switch">
-      <button type="button" data-lang="el" class="lang-btn">ΕΛ</button>
-      <button type="button" data-lang="en" class="lang-btn">EN</button>
+    <div class="header-actions">
+      <button type="button" class="icon-btn subtle" id="btn-keys"
+              data-i18n-title="keys.open" data-i18n-aria-label="keys.open">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V7a1 1 0 011-1zm1 2v8h16V8zm1 1h2v2H5zm3 0h2v2H8zm3 0h2v2h-2zm3 0h2v2h-2zm3 0h2v2h-2zM5 12h2v2H5zm3 0h8v2H8zm9 0h2v2h-2z"/></svg>
+      </button>
+      <button type="button" class="icon-btn subtle theme-btn" id="btn-theme" data-mode="auto">
+        <svg class="th-auto" viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" d="M12 3a9 9 0 110 18 9 9 0 010-18zm0 2a7 7 0 100 14 7 7 0 000-14zm0 0v14a7 7 0 010-14z"/></svg>
+        <svg class="th-light" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8a4 4 0 100 8 4 4 0 000-8zM11 1h2v3h-2zm0 19h2v3h-2zM1 11h3v2H1zm19 0h3v2h-3zM4.2 5.6l1.4-1.4 2.1 2.1-1.4 1.4zm12.1 12.1l1.4-1.4 2.1 2.1-1.4 1.4zM4.2 18.4l2.1-2.1 1.4 1.4-2.1 2.1zm12.1-12.1l2.1-2.1 1.4 1.4-2.1 2.1z"/></svg>
+        <svg class="th-dark" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 14.6A8.5 8.5 0 019.4 3.8a8.5 8.5 0 1010.8 10.8z"/></svg>
+      </button>
+      <div class="lang-switch" role="group" data-i18n-aria-label="lang.switch">
+        <button type="button" data-lang="el" class="lang-btn">ΕΛ</button>
+        <button type="button" data-lang="en" class="lang-btn">EN</button>
+      </div>
     </div>
   </div>
 
@@ -40,6 +59,8 @@
               data-i18n-title="search.clear" data-i18n-aria-label="search.clear">✕</button>
     </div>
     <div class="toolbar-btns">
+      <button type="button" id="view-series" class="chip" aria-pressed="false"
+              data-i18n="view.series"></button>
       <button type="button" id="filter-unheard" class="chip" aria-pressed="false"
               data-i18n="filter.unheard"></button>
       <button type="button" id="sort-toggle" class="chip"></button>
@@ -99,6 +120,15 @@
   <section id="continue-section" class="panel" hidden>
     <h2 data-i18n="continue.title"></h2>
     <div id="continue-card"></div>
+  </section>
+
+  <section id="new-section" class="panel" hidden>
+    <div class="panel-head">
+      <h2 data-i18n="new.title"></h2>
+      <button type="button" class="link-btn" id="btn-new-dismiss"
+              data-i18n="new.dismiss" data-i18n-title="new.dismissHint"></button>
+    </div>
+    <ul id="new-list" class="recent-list"></ul>
   </section>
 
   <section id="recent-section" class="panel" hidden>
@@ -191,6 +221,14 @@
         <svg class="off-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 19a4.5 4.5 0 01-.4-8.98 6 6 0 0111.64-1.7A4.25 4.25 0 0117.75 19z"/></svg>
         <span id="offline-label"></span>
       </button>
+      <button type="button" class="chip autoplay-chip" id="btn-autoplay" aria-pressed="false">
+        <svg class="chip-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h11v2H3zm0 4h11v2H3zm0 4h7v2H3zm13-1v8l6-4z"/></svg>
+        <span id="autoplay-label" data-i18n="autoplay.label"></span>
+      </button>
+      <button type="button" class="chip share-chip" id="btn-share"
+              data-i18n-title="share.title" data-i18n-aria-label="share.title">
+        <svg class="chip-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 16.1c-.8 0-1.4.3-2 .8l-7.1-4.2c.1-.2.1-.5.1-.7s0-.5-.1-.7L16 7.2c.5.5 1.2.8 2 .8 1.7 0 3-1.3 3-3s-1.3-3-3-3-3 1.3-3 3c0 .2 0 .5.1.7L8 9.8C7.5 9.3 6.8 9 6 9c-1.7 0-3 1.3-3 3s1.3 3 3 3c.8 0 1.5-.3 2-.8l7.1 4.2c-.1.2-.1.4-.1.6 0 1.6 1.3 2.9 2.9 2.9s2.9-1.3 2.9-2.9-1.2-2.9-2.8-2.9z"/></svg>
+      </button>
       <label class="chip sleep-chip" id="sleep-chip" data-active="false" data-i18n-title="sleep.title">
         <svg class="sleep-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 14.6A8.5 8.5 0 019.4 3.8a8.5 8.5 0 1010.8 10.8z"/></svg>
         <span id="sleep-label"></span>
@@ -220,6 +258,23 @@
     </div>
   </div>
 </footer>
+
+<dialog id="keys-dialog" class="keys-dialog" aria-labelledby="keys-title">
+  <div class="keys-head">
+    <h2 id="keys-title" data-i18n="keys.title"></h2>
+    <button type="button" class="icon-btn subtle" id="btn-keys-close"
+            data-i18n-title="keys.close" data-i18n-aria-label="keys.close">✕</button>
+  </div>
+  <dl class="keys-list">
+    <div><dt><kbd data-i18n="keys.space"></kbd> <kbd>K</kbd></dt><dd data-i18n="keys.play"></dd></div>
+    <div><dt><kbd>←</kbd> <kbd>→</kbd></dt><dd data-i18n="keys.skip"></dd></div>
+    <div><dt><kbd>Shift</kbd> + <kbd>←</kbd> <kbd>→</kbd></dt><dd data-i18n="keys.part"></dd></div>
+    <div><dt><kbd>Shift</kbd> + <kbd>P</kbd> <kbd>N</kbd></dt><dd data-i18n="keys.episode"></dd></div>
+    <div><dt><kbd>/</kbd></dt><dd data-i18n="keys.search"></dd></div>
+    <div><dt><kbd>?</kbd></dt><dd data-i18n="keys.help"></dd></div>
+    <div><dt><kbd>Esc</kbd></dt><dd data-i18n="keys.esc"></dd></div>
+  </dl>
+</dialog>
 
 <audio id="audio" preload="metadata"></audio>
 

@@ -16,10 +16,13 @@
   --radius: 10px;
   --player-h: 148px;
   --np-top: #dbe5ee;      /* top of the full-screen player; the artwork's blue */
+  color-scheme: light;
 }
 
+/* Dark: the device's setting, unless the theme button chose light; or the
+   theme button's dark. The two blocks must stay the same. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #16161a;
     --panel: #1e1e23;
     --panel-2: #26262c;
@@ -33,7 +36,24 @@
     --ok: #6cc08b;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
     --np-top: #15304b;
+    color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #16161a;
+  --panel: #1e1e23;
+  --panel-2: #26262c;
+  --text: #ececea;
+  --muted: #a2a2a0;
+  --faint: #77777a;
+  --line: #303038;
+  --accent: #d99a6c;
+  --accent-soft: #38291f;
+  --accent-text: #1b1b19;
+  --ok: #6cc08b;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
+  --np-top: #15304b;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -75,6 +95,18 @@ button { cursor: pointer; }
 .header-row { display: flex; align-items: flex-start; gap: 1rem; justify-content: space-between; }
 .brand h1 { font-size: clamp(1.05rem, 3.4vw, 1.4rem); }
 .subtitle { margin: .15rem 0 0; color: var(--muted); font-size: .8rem; }
+
+.header-actions { display: flex; align-items: center; gap: .25rem; flex: none; }
+.header-actions .icon-btn { padding: .32rem; }
+.header-actions .icon-btn svg { width: 18px; height: 18px; }
+/* The theme button shows the current choice. (.icon-btn here outranks the
+   .icon-btn svg rule further down.) */
+.icon-btn.theme-btn svg { display: none; }
+.icon-btn.theme-btn[data-mode="auto"] .th-auto,
+.icon-btn.theme-btn[data-mode="light"] .th-light,
+.icon-btn.theme-btn[data-mode="dark"] .th-dark { display: block; }
+/* Shortcuts only mean something with a keyboard. */
+@media (hover: none), (pointer: coarse) { #btn-keys { display: none; } }
 
 .lang-switch {
   display: flex; flex: none; border: 1px solid var(--line);
@@ -158,6 +190,25 @@ main { max-width: 62rem; margin: 0 auto; padding: 1rem clamp(.75rem, 3vw, 1.75re
 .recent-btn .rt { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-btn .rs { color: var(--faint); font-size: .76rem; flex: none; }
 
+/* ---------- new episodes ---------- */
+.panel-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 1rem;
+  margin-bottom: .6rem;
+}
+.panel-head h2 { margin-bottom: 0; }
+.panel-head .link-btn { font-size: .78rem; padding: 0; }
+.new-more { color: var(--faint); font-size: .78rem; padding: .45rem .2rem 0; }
+.new-badge {
+  display: inline-block; vertical-align: .1em; margin-inline-end: .4rem;
+  background: var(--accent); color: var(--accent-text);
+  border-radius: 4px; padding: .05rem .32rem;
+  font-size: .62rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+}
+.season-meta .new-pill {
+  background: var(--accent); color: var(--accent-text);
+  border-radius: 999px; padding: .1rem .45rem; font-weight: 600; margin-inline-end: .3rem;
+}
+
 /* ---------- seasons ---------- */
 .season {
   background: var(--panel); border: 1px solid var(--line);
@@ -185,10 +236,16 @@ main { max-width: 62rem; margin: 0 auto; padding: 1rem clamp(.75rem, 3vw, 1.75re
   background: var(--accent-soft); color: var(--accent);
   border-radius: 999px; padding: .1rem .45rem; font-weight: 600;
 }
-@media (prefers-color-scheme: dark) {
-  .season-meta .unheard-pill { color: var(--accent); }
-}
 .season-body { border-top: 1px solid var(--line); }
+
+/* ---------- series ---------- */
+.series-actions {
+  display: flex; align-items: center; gap: .8rem; flex-wrap: wrap;
+  padding: .6rem .75rem; background: var(--panel-2);
+}
+.series-actions .btn-primary { padding: .42rem 1rem; font-size: .82rem; }
+.series-note { color: var(--muted); font-size: .78rem; }
+.season-body > .series-actions + .ep { border-top: 0; }
 .season[data-open="false"] .season-body { display: none; }
 
 /* ---------- episode rows ---------- */
@@ -204,6 +261,9 @@ main { max-width: 62rem; margin: 0 auto; padding: 1rem clamp(.75rem, 3vw, 1.75re
 .ep.playing .ep-title { color: var(--accent); font-weight: 620; }
 /* Being re-heard: the current row should not be the faintest on screen. */
 .ep.playing.listened .ep-title, .ep.playing.listened .ep-date { opacity: 1; }
+/* The row a shared link points to, picked out for a moment. */
+.ep.flash { animation: flash 2.4s ease-out; }
+@keyframes flash { 0%, 40% { background: var(--accent-soft); } }
 
 .ep-play {
   flex: none; width: 30px; height: 30px; border-radius: 50%;
@@ -370,6 +430,13 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--faint); }
   width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor;
   stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round;
 }
+/* Autoplay and share: an icon, with the words in the tooltip and the
+   accessible name; the full-screen player has room for autoplay's label. */
+.autoplay-chip, .share-chip { display: inline-flex; align-items: center; gap: .3rem; }
+.chip .chip-icon { width: 14px; height: 14px; fill: currentColor; flex: none; }
+.autoplay-chip #autoplay-label { display: none; }
+.share-chip { padding-inline: .6rem; }
+
 /* Same green as a listened episode row, not the accent "pressed" fill. */
 .chip.listen-chip[aria-pressed="true"] { background: var(--ok); border-color: var(--ok); color: #fff; }
 #speed {
@@ -438,6 +505,7 @@ input[type="range"].volume { width: 5rem; flex: none; }
 /* While searching, the results come first. */
 body.searching #install-card,
 body.searching #continue-section,
+body.searching #new-section,
 body.searching #recent-section { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
@@ -549,7 +617,8 @@ body.searching #recent-section { display: none; }
   .player.expanded .play-btn svg { width: 30px; height: 30px; }
 
   .player.expanded .p-extra { justify-content: center; flex-wrap: wrap; gap: .5rem; }
-  .player.expanded .listen-chip #listened-label { display: inline; }
+  .player.expanded .listen-chip #listened-label,
+  .player.expanded .autoplay-chip #autoplay-label { display: inline; }
   .player.expanded .p-extra .chip { padding: .45rem .85rem; font-size: .8rem; }
 }
 @media (max-width: 360px) {
@@ -650,4 +719,24 @@ body.searching #recent-section { display: none; }
   #install-actions { gap: .5rem; }
   .btn-install { width: 100%; justify-content: center; }
   #install-actions .link-btn { width: 100%; text-align: center; }
+}
+
+/* ---------- keyboard shortcuts ---------- */
+.keys-dialog {
+  border: 1px solid var(--line); border-radius: 14px; padding: 1rem 1.2rem 1.2rem;
+  background: var(--panel); color: var(--text); box-shadow: var(--shadow);
+  width: min(26rem, calc(100vw - 2rem));
+}
+.keys-dialog::backdrop { background: rgba(0,0,0,.35); }
+.keys-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: .6rem; }
+.keys-head h2 { font-size: 1rem; }
+.keys-list { margin: 0; display: grid; gap: .45rem; }
+.keys-list > div { display: flex; justify-content: space-between; gap: 1rem; align-items: baseline; }
+.keys-list dt { flex: none; color: var(--muted); font-size: .8rem; }
+.keys-list dd { margin: 0; text-align: end; font-size: .86rem; }
+kbd {
+  display: inline-block; min-width: 1.6em; text-align: center;
+  font: 600 .74rem/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding: 0 .35rem; border: 1px solid var(--line); border-bottom-width: 2px;
+  border-radius: 5px; background: var(--panel-2); color: var(--text);
 }
