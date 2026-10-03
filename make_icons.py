@@ -48,10 +48,12 @@ ORBIT_GAP = 0.028
 ELECTRONS = (20.0, 122.0, 200.0, 290.0)
 ELECTRON_R = 0.034
 
-# The rounded-corner icons use the full square. The maskable one shrinks the
-# drawing so the orbit stays inside Android's safe zone (a centred circle of
-# radius 0.4) whatever mask the launcher applies.
-SCALE_MASKABLE = 0.84
+# How much of the tile the drawing fills. At full size the orbit and the cross
+# nearly touch the edges, which looks oversized next to other apps on a home
+# screen. The maskable icon is smaller again, because the launcher crops it
+# to the safe zone (a centred circle of radius 0.4) or close to it.
+SCALE_ANY = 0.82
+SCALE_MASKABLE = 0.68
 
 CORNER_N = 5.0   # superellipse exponent: |x/r|^n + |y/r|^n <= 1, iOS-ish
 
@@ -226,10 +228,10 @@ def main(out_dir):
     os.makedirs(out_dir, exist_ok=True)
     jobs = [
         # name,                  size, scale,          rounded corners
-        ("icon-192.png",          192, 1.0,            True),
-        ("icon-512.png",          512, 1.0,            True),
+        ("icon-192.png",          192, SCALE_ANY,      True),
+        ("icon-512.png",          512, SCALE_ANY,      True),
         ("icon-maskable-512.png", 512, SCALE_MASKABLE, False),  # Android masks it
-        ("apple-touch-icon.png",  180, 1.0,            False),  # iOS masks it
+        ("apple-touch-icon.png",  180, SCALE_ANY,      False),  # iOS masks it
     ]
     for name, size, scale, rounded in jobs:
         rgb, alpha = render(size, scale, rounded)
