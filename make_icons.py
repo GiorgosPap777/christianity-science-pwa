@@ -3,7 +3,7 @@
 
     python3 _site/make_icons.py [out_dir]
 
-The icon is a cross with an orbit around it: three electrons, the near half of
+The icon is a cross with an orbit around it: four electrons, the near half of
 the ring passing in front of the cross and the far half behind it. It is drawn
 from geometry, not from artwork, so it stays crisp at every size and can be
 tweaked by editing the numbers below.
@@ -42,8 +42,10 @@ ORBIT_W = 0.036
 ORBIT_GAP = 0.028
 
 # Electrons, by angle along the ring (0 = right end, counter-clockwise; 180-360
-# is the near half). Kept on stretches of the ring that clear the cross.
-ELECTRONS = (200.0, 20.0, 290.0)
+# is the near half). Far-half ones are drawn behind the cross: 122 is tucked
+# under the left arm, as if just coming out from behind it. The others sit on
+# stretches of the ring that clear the cross.
+ELECTRONS = (20.0, 122.0, 200.0, 290.0)
 ELECTRON_R = 0.034
 
 # The rounded-corner icons use the full square. The maskable one shrinks the
@@ -110,14 +112,17 @@ def design():
         d = max(abs(ellipse_dist(xl, yl, a, b)) - ORBIT_W / 2 - ORBIT_GAP, -yl)
         return max(d, cross(x, y) - ORBIT_GAP - ORBIT_W)
 
-    electrons = []
+    # electrons on the far half go behind the cross, like the ring there
+    far, close = [], []
     for deg in ELECTRONS:
         ex, ey = a * math.cos(math.radians(deg)), -b * math.sin(math.radians(deg))
-        electrons.append(circle(ox + ex * c + ey * s, oy - ex * s + ey * c, ELECTRON_R))
-    dots = lambda x, y: min(e(x, y) for e in electrons)
+        dot = circle(ox + ex * c + ey * s, oy - ex * s + ey * c, ELECTRON_R)
+        (close if ey > 0 else far).append(dot)
+    dots = lambda group: (lambda x, y: min(e(x, y) for e in group)) if group else (lambda x, y: 1.0)
 
     bg, cream, gold = hexrgb(BG), hexrgb(CREAM), hexrgb(GOLD)
-    return bg, [(ring, gold), (cross, cream), (gap, bg), (near, gold), (dots, gold)]
+    return bg, [(ring, gold), (dots(far), gold), (cross, cream), (gap, bg),
+                (near, gold), (dots(close), gold)]
 
 
 # ------------------------------------------------------------------- render
