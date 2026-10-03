@@ -157,7 +157,7 @@ server-side state, no account, and no network calls beyond your own server.
 | `index.html` `styles.css` `app.js` `i18n.js` | the site |
 | `sw.js` | service worker: offline shell + range-aware audio cache |
 | `manifest.webmanifest` | PWA metadata |
-| `make_icons.py` | regenerates `icons/` from `icon-source.jpg`: keeps the emblem, paints out the lettering with a fitted background (ffmpeg crops/scales, everything else pure Python) |
+| `make_icons.py` | draws `icons/` (a cross with an orbit) from geometry, in plain Python; edit the numbers at the top to change it |
 | `Dockerfile` `entrypoint.sh` `compose.yaml` | container build and deployment |
 
 ## Publishing

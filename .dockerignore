@@ -14,5 +14,5 @@ Dockerfile
 compose.yaml
 DOCKERHUB.md
 
-# only needed to regenerate icons/; the generated PNGs are what ship
+# the old app artwork; make_icons.py no longer uses it
 icon-source.jpg

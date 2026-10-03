@@ -1,238 +1,158 @@
 #!/usr/bin/env python3
-"""Generate the PWA icon set from the app artwork.
+"""Draw the PWA icon set.
 
     python3 _site/make_icons.py [out_dir]
 
-The source (icon-source.jpg) is a phone home-screen mockup. Only the rounded
-square icon panel is used, and only its emblem: the cross, helix and book. The
-lettering under it is unreadable at icon size and duplicates the app name, so
-it is painted out:
+The icon is a cross with an orbit around it: three electrons, the near half of
+the ring passing in front of the cross and the far half behind it. It is drawn
+from geometry, not from artwork, so it stays crisp at every size and can be
+tweaked by editing the numbers below.
 
-  1. The panel's background is a smooth gradient. It is fitted with a low-order
-     polynomial, sampled only where there is no emblem, lettering or rim.
-  2. Each icon is a square window centred on the emblem. Original pixels are
-     kept above the lettering and fade into the fitted background (plus a
-     little grain, to match the JPEG) everywhere else, so the window can extend
-     past the panel's edges and over the old lettering.
-
-ffmpeg does the crop and the high-quality downscale (it is already a project
-dependency for ffprobe). Everything else, including the PNG encoding, is
-plain Python, so no imaging library is needed. Writes icons/ next to this
-script by default.
-
-Re-run only if you change the artwork or the layout below. It takes a few
-seconds per icon.
+Every shape is a signed distance field (negative inside, in icon units), and a
+pixel's coverage is clamp(0.5 - distance / pixel size). That gives exact
+antialiasing at any resolution without supersampling. Plain Python only, no
+imaging library or ffmpeg. Writes icons/ next to this script by default.
 """
 
+import math
 import os
-import random
 import struct
-import subprocess
 import sys
 import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(HERE, "icon-source.jpg")
 OUT = os.path.join(HERE, "icons")
 
-# The icon panel inside the 1024x1024 mockup: width, height, x, y.
-# Measured from the panel's bright rim, not eyeballed.
-CROP = (706, 706, 162, 182)
-P = CROP[0]
+# Icon space: (0, 0) is the top-left corner of the full-bleed square, (1, 1)
+# the bottom-right.
+BG = "#16324d"
+CREAM = "#f4ecdc"
+GOLD = "#e0a46e"
 
-# In panel pixels, measured from a brightness profile of the rows and columns.
-EMBLEM = (179, 54, 528, 516)          # x0, y0, x1, y1: cross top to book glow
-TEXT_ROWS = [(538, 600), (606, 661)]  # the two lines of lettering
-CX = 353.0                            # emblem's horizontal centre (= panel's)
-CY = (EMBLEM[1] + EMBLEM[3]) / 2.0    # and vertical centre
+# Latin cross: centre x, top, bottom, arm height, arm half-length, thickness,
+# corner radius.
+CROSS = (0.5, 0.16, 0.84, 0.385, 0.215, 0.118, 0.012)
 
-# Original pixels are kept inside this rounded rectangle and fade to the
-# fitted background across FEATHER px. Its bottom edge sits in the clean band
-# between the book's glow (row 516) and the lettering (row 543).
-KEEP = (22.0, 22.0, 684.0, 530.0)
-KEEP_R = 160.0
-FEATHER = 10.0
-# A longer fade along the top, where the glow above the cross would otherwise
-# stop at a visible line. Ends well above the cross (row 54).
-TOP_FADE = (18.0, 42.0)
+# Orbit ellipse: centre, semi-axes, tilt (degrees, right end up), stroke, and
+# the gap cut into the cross where the ring passes in front of it.
+ORBIT_C = (0.5, 0.47)
+ORBIT_AB = (0.385, 0.135)
+ORBIT_TILT = 24.0
+ORBIT_W = 0.036
+ORBIT_GAP = 0.028
 
-GRAIN = 1.6                           # +/- levels of noise on the fitted areas
+# Electrons, by angle along the ring (0 = right end, counter-clockwise; 180-360
+# is the near half). Kept on stretches of the ring that clear the cross.
+ELECTRONS = (200.0, 20.0, 290.0)
+ELECTRON_R = 0.034
 
-# Emblem height as a share of the icon. "any" icons get a tight crop; the
-# maskable one leaves room for the circle Android cuts it to (80% safe zone).
-FILL_ANY = 0.76
-FILL_MASKABLE = 0.58
+# The rounded-corner icons use the full square. The maskable one shrinks the
+# drawing so the orbit stays inside Android's safe zone (a centred circle of
+# radius 0.4) whatever mask the launcher applies.
+SCALE_MASKABLE = 0.84
 
 CORNER_N = 5.0   # superellipse exponent: |x/r|^n + |y/r|^n <= 1, iOS-ish
-SS = 4           # vertical supersamples per row, for antialiased corners
 
 
-def ffmpeg(args, data=None):
-    try:
-        res = subprocess.run(["ffmpeg", "-v", "error", "-y"] + args,
-                             input=data, capture_output=True)
-    except FileNotFoundError:
-        sys.exit("ffmpeg not found; install it first")
-    if res.returncode != 0:
-        sys.exit("ffmpeg failed: " + res.stderr.decode(errors="replace"))
-    return res.stdout
+def hexrgb(h):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
 
-def panel():
-    """The icon panel at full resolution, raw rgb24."""
-    if not os.path.exists(SRC):
-        sys.exit(f"missing {SRC}")
-    w, h, x, y = CROP
-    out = ffmpeg(["-i", SRC, "-vf", f"crop={w}:{h}:{x}:{y}",
-                  "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
-    if len(out) != w * h * 3:
-        sys.exit("ffmpeg returned an unexpected crop")
-    return out
+# -------------------------------------------------------------------- shapes
+
+def box(cx, cy, hw, hh, r):
+    def d(x, y):
+        qx = abs(x - cx) - hw + r
+        qy = abs(y - cy) - hh + r
+        return math.hypot(max(qx, 0.0), max(qy, 0.0)) + min(max(qx, qy), 0.0) - r
+    return d
 
 
-def scale(rgb, src, dst):
-    """Lanczos downscale of a square rgb24 image."""
-    return bytearray(ffmpeg(
-        ["-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{src}x{src}", "-i", "-",
-         "-vf", f"scale={dst}:{dst}:flags=lanczos",
-         "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], bytes(rgb)))
+def circle(cx, cy, r):
+    return lambda x, y: math.hypot(x - cx, y - cy) - r
 
 
-# ---------------------------------------------------------------- background
-
-def terms(x, y):
-    """Polynomial basis, symmetric about the panel's vertical axis. Clamped so
-    the window can reach past the panel without the fit running away."""
-    u = max(-1.0, min(1.0, (x - CX) / CX))
-    v = max(0.0, min(1.0, y / P))
-    u2 = u * u
-    v2 = v * v
-    return (1.0, v, v2, v2 * v, v2 * v2,
-            u2, u2 * v, u2 * v2, u2 * v2 * v,
-            u2 * u2, u2 * u2 * v, u2 * u2 * u2)
+def ellipse_dist(xl, yl, a, b):
+    """Approximate distance to an axis-aligned ellipse (first-order: the
+    implicit function divided by its gradient). Exact on the curve, which is
+    all the antialiasing needs."""
+    k = math.hypot(xl / a, yl / b)
+    if k == 0:
+        return -min(a, b)
+    return (k - 1.0) * k / math.hypot(xl / (a * a), yl / (b * b))
 
 
-def in_rounded(x, y, box, r):
-    x0, y0, x1, y1 = box
-    if x < x0 or x > x1 or y < y0 or y > y1:
-        return False
-    dx = max(x0 + r - x, 0.0, x - (x1 - r))
-    dy = max(y0 + r - y, 0.0, y - (y1 - r))
-    return dx * dx + dy * dy <= r * r
+def design():
+    """The layers, back to front: (signed distance, colour)."""
+    cx, top, bottom, arm_y, arm_half, t, r = CROSS
+    beam = box(cx, (top + bottom) / 2, t / 2, (bottom - top) / 2, r)
+    arm = box(cx, arm_y, arm_half, t / 2, r)
+    cross = lambda x, y: min(beam(x, y), arm(x, y))
+
+    ox, oy = ORBIT_C
+    a, b = ORBIT_AB
+    c, s = math.cos(math.radians(ORBIT_TILT)), math.sin(math.radians(ORBIT_TILT))
+
+    def local(x, y):                       # ellipse frame; +y is the near half
+        dx, dy = x - ox, y - oy
+        return dx * c - dy * s, dx * s + dy * c
+
+    def ring(x, y):
+        return abs(ellipse_dist(*local(x, y), a, b)) - ORBIT_W / 2
+
+    def near(x, y):
+        xl, yl = local(x, y)
+        return max(abs(ellipse_dist(xl, yl, a, b)) - ORBIT_W / 2, -yl)
+
+    def gap(x, y):                         # background-coloured cut, only on the cross
+        xl, yl = local(x, y)
+        d = max(abs(ellipse_dist(xl, yl, a, b)) - ORBIT_W / 2 - ORBIT_GAP, -yl)
+        return max(d, cross(x, y) - ORBIT_GAP - ORBIT_W)
+
+    electrons = []
+    for deg in ELECTRONS:
+        ex, ey = a * math.cos(math.radians(deg)), -b * math.sin(math.radians(deg))
+        electrons.append(circle(ox + ex * c + ey * s, oy - ex * s + ey * c, ELECTRON_R))
+    dots = lambda x, y: min(e(x, y) for e in electrons)
+
+    bg, cream, gold = hexrgb(BG), hexrgb(CREAM), hexrgb(GOLD)
+    return bg, [(ring, gold), (cross, cream), (gap, bg), (near, gold), (dots, gold)]
 
 
-def is_background(x, y):
-    if not in_rounded(x, y, (22.0, 22.0, 684.0, 690.0), KEEP_R):
-        return False                                   # rim and corners
-    if 150 <= x <= 560 and 40 <= y <= 530:
-        return False                                   # emblem and its glow
-    return not any(a <= y <= b for a, b in TEXT_ROWS)  # lettering
+# ------------------------------------------------------------------- render
 
-
-def solve(a, b):
-    """Gaussian elimination with partial pivoting; a is n x n, b length n."""
-    n = len(b)
-    m = [row[:] + [b[i]] for i, row in enumerate(a)]
-    for c in range(n):
-        p = max(range(c, n), key=lambda r: abs(m[r][c]))
-        m[c], m[p] = m[p], m[c]
-        for r in range(c + 1, n):
-            f = m[r][c] / m[c][c]
-            for k in range(c, n + 1):
-                m[r][k] -= f * m[c][k]
-    x = [0.0] * n
-    for r in range(n - 1, -1, -1):
-        x[r] = (m[r][n] - sum(m[r][k] * x[k] for k in range(r + 1, n))) / m[r][r]
-    return x
-
-
-def fit_background(src):
-    """Least-squares fit of the background, one coefficient set per channel."""
-    n = len(terms(0, 0))
-    ata = [[0.0] * n for _ in range(n)]
-    atb = [[0.0] * n for _ in range(3)]
-    count = 0
-    for y in range(0, P, 3):
-        for x in range(0, P, 3):
-            if not is_background(x + 0.5, y + 0.5):
-                continue
-            t = terms(x + 0.5, y + 0.5)
-            i = (y * P + x) * 3
-            for r in range(n):
-                tr = t[r]
-                row = ata[r]
-                for c in range(n):
-                    row[c] += tr * t[c]
-                for k in range(3):
-                    atb[k][r] += tr * src[i + k]
-            count += 1
-    coef = [solve(ata, atb[k]) for k in range(3)]
-    return coef, count
-
-
-# ----------------------------------------------------------------- composite
-
-def keep_alpha(x, y):
-    """1 inside KEEP, 0 outside, linear across FEATHER px at its edge."""
-    x0, y0, x1, y1 = KEEP
-    r = KEEP_R
-    dx = max(x0 + r - x, 0.0, x - (x1 - r))
-    dy = max(y0 + r - y, 0.0, y - (y1 - r))
-    if dx > 0 and dy > 0:
-        d = (dx * dx + dy * dy) ** 0.5 - r     # distance outside the corner arc
-    else:
-        d = max(x0 - x, x - x1, y0 - y, y - y1)
-    a = max(0.0, min(1.0, 0.5 - d / FEATHER))
-    return min(a, max(0.0, min(1.0, (y - TOP_FADE[0]) / (TOP_FADE[1] - TOP_FADE[0]))))
-
-
-def window(src, coef, fill):
-    """A square of panel pixels centred on the emblem, sized so the emblem is
-    `fill` of its height; returns (side, rgb24)."""
-    side = int(round((EMBLEM[3] - EMBLEM[1]) / fill))
-    ox = int(round(CX - side / 2.0))
-    oy = int(round(CY - side / 2.0))
-    rnd = random.Random(1)                    # same grain on every run
-    out = bytearray(side * side * 3)
-    for j in range(side):
-        y = oy + j
-        for i in range(side):
-            x = ox + i
-            a = keep_alpha(x + 0.5, y + 0.5) if 0 <= x < P and 0 <= y < P else 0.0
-            d = (j * side + i) * 3
-            if a >= 1.0:
-                s = (y * P + x) * 3
-                out[d:d + 3] = src[s:s + 3]
-                continue
-            t = terms(x + 0.5, y + 0.5)
-            g = rnd.uniform(-GRAIN, GRAIN)
-            s = (y * P + x) * 3
-            for k in range(3):
-                bg = sum(c * v for c, v in zip(coef[k], t)) + g
-                v = src[s + k] * a + bg * (1.0 - a) if a > 0 else bg
-                out[d + k] = max(0, min(255, int(round(v))))
-    return side, out
-
-
-# --------------------------------------------------------------------- shape
-
-def squircle_alpha(size):
-    """Antialiased coverage mask for the rounded-square corners."""
-    r = size / 2.0
-    a = bytearray(size * size)
+def render(size, scale, rounded):
+    """RGB bytes, plus alpha bytes for the rounded-corner variant."""
+    bg, layers = design()
+    px = 1.0 / (size * scale)              # one pixel, in icon units
+    half = size / 2.0
+    rgb = bytearray(size * size * 3)
+    alpha = bytearray(size * size) if rounded else None
     for py in range(size):
-        cov = [0.0] * size
-        for s in range(SS):
-            dy = abs((py + (s + 0.5) / SS) - r)
-            tt = 1.0 - (dy / r) ** CORNER_N
-            xlim = r * (tt ** (1.0 / CORNER_N)) if tt > 0 else 0.0
-            for px in range(size):
-                dx = abs((px + 0.5) - r)
-                cov[px] += min(1.0, max(0.0, xlim - dx + 0.5))
-        base = py * size
-        for px in range(size):
-            a[base + px] = int(round(255 * cov[px] / SS))
-    return a
+        y = 0.5 + ((py + 0.5) / size - 0.5) / scale
+        for qx in range(size):
+            x = 0.5 + ((qx + 0.5) / size - 0.5) / scale
+            r, g, b = bg
+            for f, col in layers:
+                cov = 0.5 - f(x, y) / px
+                if cov <= 0.0:
+                    continue
+                cov = min(1.0, cov)
+                r += (col[0] - r) * cov
+                g += (col[1] - g) * cov
+                b += (col[2] - b) * cov
+            i = (py * size + qx) * 3
+            rgb[i], rgb[i + 1], rgb[i + 2] = int(r + 0.5), int(g + 0.5), int(b + 0.5)
+            if rounded:
+                # superellipse corners; the implicit function over its gradient
+                # is the distance to the edge, in pixels
+                u = abs(qx + 0.5 - half) / half
+                v = abs(py + 0.5 - half) / half
+                m = max(u, v, 1e-6)
+                edge = (1.0 - u ** CORNER_N - v ** CORNER_N) * half / (CORNER_N * m ** (CORNER_N - 1))
+                alpha[py * size + qx] = int(255 * max(0.0, min(1.0, edge + 0.5)) + 0.5)
+    return rgb, alpha
 
 
 # ----------------------------------------------------------------------- png
@@ -299,27 +219,18 @@ def write_png(path, size, rgb, alpha=None):
 
 def main(out_dir):
     os.makedirs(out_dir, exist_ok=True)
-    src = panel()
-    coef, n = fit_background(src)
-    print(f"  background fitted from {n} samples")
-
-    windows = {}
     jobs = [
-        # name,                  size, emblem fill,    rounded corners
-        ("icon-192.png",          192, FILL_ANY,       True),
-        ("icon-512.png",          512, FILL_ANY,       True),
-        ("icon-maskable-512.png", 512, FILL_MASKABLE,  False),  # Android masks it
-        ("apple-touch-icon.png",  180, FILL_ANY,       False),  # iOS masks it
+        # name,                  size, scale,          rounded corners
+        ("icon-192.png",          192, 1.0,            True),
+        ("icon-512.png",          512, 1.0,            True),
+        ("icon-maskable-512.png", 512, SCALE_MASKABLE, False),  # Android masks it
+        ("apple-touch-icon.png",  180, 1.0,            False),  # iOS masks it
     ]
-    for name, size, fill, rounded in jobs:
-        if fill not in windows:
-            windows[fill] = window(src, coef, fill)
-        side, art = windows[fill]
-        rgb = scale(art, side, size)
-        alpha = squircle_alpha(size) if rounded else None
+    for name, size, scale, rounded in jobs:
+        rgb, alpha = render(size, scale, rounded)
         n = write_png(os.path.join(out_dir, name), size, rgb, alpha)
         shape = "rounded" if rounded else "square"
-        print(f"  {name:24s} {size}x{size}  {n/1024:6.1f} KB  ({shape}, emblem {fill:.0%})")
+        print(f"  {name:24s} {size}x{size}  {n/1024:6.1f} KB  ({shape}, scale {scale:.0%})")
 
 
 if __name__ == "__main__":
