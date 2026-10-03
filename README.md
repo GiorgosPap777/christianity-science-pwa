@@ -1,8 +1,8 @@
 # Χριστιανισμός - Επιστήμη
 
 A fast, installable, offline-capable web player for a personal archive of the
-Greek podcast **Χριστιανισμός - Επιστήμη** (Christianity - Science) — 19 seasons,
-351 episodes, each split into sequential mp3 parts.
+Greek podcast **Χριστιανισμός - Επιστήμη** (Christianity - Science) — 20 seasons,
+353 episodes, each split into sequential mp3 parts.
 
 [![Docker Hub](https://img.shields.io/docker/v/giorgospap777/christianity-science-pwa?label=docker%20hub&sort=semver)](https://hub.docker.com/r/giorgospap777/christianity-science-pwa)
 [![Image size](https://img.shields.io/docker/image-size/giorgospap777/christianity-science-pwa/latest)](https://hub.docker.com/r/giorgospap777/christianity-science-pwa)

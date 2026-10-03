@@ -75,7 +75,7 @@ function fmtTime(sec) {
 /* --------------------------------------------------------------- app data */
 
 let DATA = null;
-let SEASONS = [];          // chronological, season 1 .. 19
+let SEASONS = [];          // chronological, season 1 .. N
 let FLAT = [];             // every episode, chronological across the archive
 const BY_ID = Object.create(null);
 
