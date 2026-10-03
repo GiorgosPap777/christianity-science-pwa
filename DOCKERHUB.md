@@ -8,7 +8,8 @@ podcast **Χριστιανισμός - Επιστήμη** (Christianity - Scienc
 The image ships **only the site and server — no audio**. Your archive stays on
 the host and is bind-mounted read-only, so a 20 GB collection never touches the
 image. The episode index is rebuilt from that mount every time the container
-starts, so adding episodes only needs a restart.
+starts, so adding episodes only needs a restart, or none at all with the
+downloader below.
 
 ## Quick start
 
@@ -51,11 +52,48 @@ reported in the container log rather than silently skipped.
 | `REBUILD_INDEX` | `1` | set `0` to skip the startup scan |
 | `INDEX_OUT` | `/data/index.json` | where the generated index is written |
 | `TLS_CERT` / `TLS_KEY` | unset | serve HTTPS directly instead of behind a proxy |
+| `FETCH_URL` | the official radio page | where `fetch` looks for new episodes |
 
 Runs as **uid 10001**. If your archive is not readable by that user, add
 `--user "$(id -u):$(id -g)"` — the index is written to `/data`, which any uid
 can write, so overriding the user is safe. Mount a volume at `/data` if you
 want the index to survive restarts (then `REBUILD_INDEX=0` becomes useful).
+
+## Downloading new episodes automatically
+
+The same image can also keep the archive up to date. Run as `fetch`, it reads
+the official radio page (https://christianity-science.gr/radio.htm), downloads
+any broadcast newer than the newest one in the archive into the right season
+folder, named the way the existing folders are, and rebuilds the index. The
+player picks up the new index without a restart, and the new episode shows up
+as new for everyone.
+
+It needs the archive **read-write**, so it runs as its own container and the
+player keeps its read-only mount. With Compose, beside the player:
+
+```yaml
+  fetcher:
+    image: giorgospap777/christianity-science-pwa:latest
+    container_name: christianity-science-fetcher
+    restart: unless-stopped
+    command: ["fetch", "--every", "6h"]
+    volumes:
+      - /path/to/archive:/archive        # read-write: new episodes go here
+      - index-data:/data                 # the same volume as the player's
+    user: "1000:1000"                    # a user who owns the archive
+    healthcheck:
+      disable: true                      # the image's check is the player's
+```
+
+The player needs `index-data:/data` too, so both use one index. Each episode
+is downloaded into `.incoming/` inside the archive and moved into its season
+folder only when every part is complete; an interrupted download carries on
+from the last complete part. Older broadcasts that are missing from the
+archive are listed in the log but not downloaded, since they may be missing on
+purpose; `--include-older` fetches them as well. `--dry-run` shows what would
+be downloaded, and `--max` (default 10) caps the episodes per run.
+
+Once, by hand: `docker compose run --rm fetcher fetch --dry-run`.
 
 ## What it does
 

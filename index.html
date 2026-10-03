@@ -213,48 +213,52 @@
     </div>
 
     <div class="p-extra">
-      <button type="button" class="chip listen-chip" id="btn-listened" aria-pressed="false">
-        <svg class="listen-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5"/></svg>
-        <span id="listened-label"></span>
-      </button>
-      <button type="button" class="chip offline-chip" id="btn-offline" aria-pressed="false">
-        <svg class="off-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 19a4.5 4.5 0 01-.4-8.98 6 6 0 0111.64-1.7A4.25 4.25 0 0117.75 19z"/></svg>
-        <span id="offline-label"></span>
-      </button>
-      <button type="button" class="chip autoplay-chip" id="btn-autoplay" aria-pressed="false">
-        <svg class="chip-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h11v2H3zm0 4h11v2H3zm0 4h7v2H3zm13-1v8l6-4z"/></svg>
-        <span id="autoplay-label" data-i18n="autoplay.label"></span>
-      </button>
-      <button type="button" class="chip share-chip" id="btn-share"
-              data-i18n-title="share.title" data-i18n-aria-label="share.title">
-        <svg class="chip-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 16.1c-.8 0-1.4.3-2 .8l-7.1-4.2c.1-.2.1-.5.1-.7s0-.5-.1-.7L16 7.2c.5.5 1.2.8 2 .8 1.7 0 3-1.3 3-3s-1.3-3-3-3-3 1.3-3 3c0 .2 0 .5.1.7L8 9.8C7.5 9.3 6.8 9 6 9c-1.7 0-3 1.3-3 3s1.3 3 3 3c.8 0 1.5-.3 2-.8l7.1 4.2c-.1.2-.1.4-.1.6 0 1.6 1.3 2.9 2.9 2.9s2.9-1.3 2.9-2.9-1.2-2.9-2.8-2.9z"/></svg>
-      </button>
-      <label class="chip sleep-chip" id="sleep-chip" data-active="false" data-i18n-title="sleep.title">
-        <svg class="sleep-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 14.6A8.5 8.5 0 019.4 3.8a8.5 8.5 0 1010.8 10.8z"/></svg>
-        <span id="sleep-label"></span>
-        <select id="sleep" data-i18n-aria-label="sleep.title">
-          <option value="0" selected></option>
-          <option value="15"></option>
-          <option value="30"></option>
-          <option value="45"></option>
-          <option value="60"></option>
-          <option value="part"></option>
-          <option value="episode"></option>
-        </select>
-      </label>
-      <label class="speed-wrap">
-        <span class="vis-hidden" data-i18n="player.speed"></span>
-        <select id="speed" data-i18n-title="player.speed">
-          <option value="0.75">0.75×</option>
-          <option value="1" selected>1×</option>
-          <option value="1.25">1.25×</option>
-          <option value="1.5">1.5×</option>
-          <option value="1.75">1.75×</option>
-          <option value="2">2×</option>
-        </select>
-      </label>
-      <input type="range" id="volume" min="0" max="1" step="0.01" value="1"
-             class="volume" data-i18n-title="player.volume" data-i18n-aria-label="player.volume">
+      <div class="p-group">
+        <button type="button" class="chip listen-chip" id="btn-listened" aria-pressed="false">
+          <svg class="listen-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5"/></svg>
+          <span id="listened-label"></span>
+        </button>
+        <button type="button" class="chip offline-chip" id="btn-offline" aria-pressed="false">
+          <svg class="off-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 19a4.5 4.5 0 01-.4-8.98 6 6 0 0111.64-1.7A4.25 4.25 0 0117.75 19z"/></svg>
+          <span id="offline-label"></span>
+        </button>
+      </div>
+      <div class="p-group">
+        <button type="button" class="chip autoplay-chip" id="btn-autoplay" aria-pressed="false">
+          <svg class="chip-icon" viewBox="0.5 1.5 24 24" aria-hidden="true"><path d="M3 6h11v2H3zm0 4h11v2H3zm0 4h7v2H3zm13-1v8l6-4z"/></svg>
+          <span id="autoplay-label" data-i18n="autoplay.label"></span>
+        </button>
+        <button type="button" class="chip share-chip" id="btn-share"
+                data-i18n-title="share.title" data-i18n-aria-label="share.title">
+          <svg class="chip-icon" viewBox="1 0 24 24" aria-hidden="true"><path d="M18 16.1c-.8 0-1.4.3-2 .8l-7.1-4.2c.1-.2.1-.5.1-.7s0-.5-.1-.7L16 7.2c.5.5 1.2.8 2 .8 1.7 0 3-1.3 3-3s-1.3-3-3-3-3 1.3-3 3c0 .2 0 .5.1.7L8 9.8C7.5 9.3 6.8 9 6 9c-1.7 0-3 1.3-3 3s1.3 3 3 3c.8 0 1.5-.3 2-.8l7.1 4.2c-.1.2-.1.4-.1.6 0 1.6 1.3 2.9 2.9 2.9s2.9-1.3 2.9-2.9-1.2-2.9-2.8-2.9z"/></svg>
+        </button>
+        <label class="chip sleep-chip" id="sleep-chip" data-active="false" data-i18n-title="sleep.title">
+          <svg class="sleep-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 14.6A8.5 8.5 0 019.4 3.8a8.5 8.5 0 1010.8 10.8z"/></svg>
+          <span id="sleep-label"></span>
+          <select id="sleep" data-i18n-aria-label="sleep.title">
+            <option value="0" selected></option>
+            <option value="15"></option>
+            <option value="30"></option>
+            <option value="45"></option>
+            <option value="60"></option>
+            <option value="part"></option>
+            <option value="episode"></option>
+          </select>
+        </label>
+        <label class="speed-wrap">
+          <span class="vis-hidden" data-i18n="player.speed"></span>
+          <select id="speed" data-i18n-title="player.speed">
+            <option value="0.75">0.75×</option>
+            <option value="1" selected>1×</option>
+            <option value="1.25">1.25×</option>
+            <option value="1.5">1.5×</option>
+            <option value="1.75">1.75×</option>
+            <option value="2">2×</option>
+          </select>
+        </label>
+        <input type="range" id="volume" min="0" max="1" step="0.01" value="1"
+               class="volume" data-i18n-title="player.volume" data-i18n-aria-label="player.volume">
+      </div>
     </div>
   </div>
 </footer>

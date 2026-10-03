@@ -22,7 +22,25 @@ services:
     # user: "1000:1000"
 
     # Optional: persist the generated index so REBUILD_INDEX=0 is useful.
+    # Needed, too, by the downloader below, which rebuilds this same index.
     # volumes:
     #   - index-data:/data
+
+  # Optional: download new episodes from the official site into the archive
+  # every 6 hours. It needs the archive read-write, so it runs on its own and
+  # the player above keeps its read-only mount. See "Downloading new episodes
+  # automatically" in the README.
+  # fetcher:
+  #   image: giorgospap777/christianity-science-pwa:latest
+  #   container_name: christianity-science-fetcher
+  #   restart: unless-stopped
+  #   command: ["fetch", "--every", "6h"]
+  #   volumes:
+  #     - /path/to/christianity-science:/archive    # read-write
+  #     - index-data:/data
+  #   user: "1000:1000"                            # a user who owns the archive
+  #   healthcheck:
+  #     disable: true
+
 # volumes:
 #   index-data:

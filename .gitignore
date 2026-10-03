@@ -7,3 +7,6 @@ index.json
 __pycache__/
 *.pyc
 .DS_Store
+
+# build_index.py writes through a temporary file beside the index
+.index.*.tmp

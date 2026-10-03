@@ -1,6 +1,9 @@
 #!/bin/sh
 # Container entrypoint: verify the archive is mounted and the index is
 # writable, rebuild the index from whatever is actually on disk, then serve.
+#
+# With "fetch" as the command (docker run ... fetch --every 6h) the container
+# runs the downloader instead of the server: see fetch_new.py.
 set -eu
 
 ARCHIVE_ROOT="${ARCHIVE_ROOT:-/archive}"
@@ -46,6 +49,17 @@ if ! touch "$INDEX_DIR/.writetest" 2>/dev/null; then
   exit 1
 fi
 rm -f "$INDEX_DIR/.writetest"
+
+if [ "${1:-}" = "fetch" ]; then
+  shift
+  if [ ! -w "$ARCHIVE_ROOT" ]; then
+    echo "ERROR: the downloader cannot write to $ARCHIVE_ROOT (uid $(id -u))." >&2
+    echo "       Mount the archive read-write for this container, without :ro," >&2
+    echo "       and run it as a user who owns the archive:  --user 1000:1000" >&2
+    exit 1
+  fi
+  exec python3 /app/_site/fetch_new.py "$@"
+fi
 
 if [ "$REBUILD_INDEX" != "0" ] || [ ! -f "$INDEX_OUT" ]; then
   echo "Building index from $ARCHIVE_ROOT ..."

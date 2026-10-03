@@ -324,10 +324,9 @@ mark { background: var(--accent-soft); color: inherit; border-radius: 3px; paddi
 .ep-progress { height: 3px; background: var(--panel-2); }
 .ep-progress-fill { height: 100%; width: 0; background: var(--accent); transition: width .25s linear; }
 
-/* Wider than the list column: at 62rem the side columns are too narrow for
-   the title and for the chips, which then wrap onto a third row. */
+/* The whole width of the window, as a desktop player bar: the title gets the
+   room it needs and the seek bar can grow (below). */
 .player-inner {
-  max-width: 76rem; margin: 0 auto;
   padding: .55rem clamp(.75rem, 3vw, 1.75rem) .7rem;
   display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center; gap: .9rem;
@@ -392,6 +391,12 @@ mark { background: var(--accent-soft); color: inherit; border-radius: 3px; paddi
 }
 
 .p-seek { display: flex; align-items: center; gap: .5rem; width: min(30rem, 100%); }
+/* Side by side, the centre column is as wide as the seek bar: what is left
+   after about 31rem a side for the title and the chips, between the width of
+   the buttons above it and 38rem. */
+@media (min-width: 861px) {
+  .p-seek { width: clamp(15.6rem, 100vw - 62rem, 38rem); }
+}
 .time {
   color: var(--faint); font-size: .72rem; font-variant-numeric: tabular-nums;
   flex: none; min-width: 3.1em; text-align: center;
@@ -420,11 +425,17 @@ input[type="range"]::-moz-range-thumb {
 }
 input[type="range"]:disabled::-webkit-slider-thumb { background: var(--faint); }
 
-.p-extra {
+/* Two groups, the episode's own chips and the player's settings, so that
+   when the row is too narrow the settings move down as a whole rather than
+   one chip at a time. */
+.p-extra, .p-group {
   display: flex; align-items: center; gap: .45rem;
   justify-content: flex-end; flex-wrap: wrap;
 }
-.p-extra .chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-extra .chip {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-height: 30px; line-height: 1.2; justify-content: center;
+}
 .listen-chip { display: inline-flex; align-items: center; gap: .3rem; }
 .listen-chip .listen-icon {
   width: 13px; height: 13px; flex: none; fill: none; stroke: currentColor;
@@ -435,13 +446,16 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--faint); }
 .autoplay-chip, .share-chip { display: inline-flex; align-items: center; gap: .3rem; }
 .chip .chip-icon { width: 14px; height: 14px; fill: currentColor; flex: none; }
 .autoplay-chip #autoplay-label { display: none; }
-.share-chip { padding-inline: .6rem; }
+/* The icon-only chips, all the same size, their icons a little larger than
+   the ones beside a label. */
+.autoplay-chip, .share-chip, .sleep-chip { min-width: 2.4rem; padding-inline: .6rem; }
+.autoplay-chip .chip-icon, .share-chip .chip-icon { width: 16px; height: 16px; }
 
 /* Same green as a listened episode row, not the accent "pressed" fill. */
 .chip.listen-chip[aria-pressed="true"] { background: var(--ok); border-color: var(--ok); color: #fff; }
 #speed {
   background: var(--panel); border: 1px solid var(--line);
-  border-radius: 999px; padding: .28rem 1.15rem; font-size: .76rem;
+  border-radius: 999px; padding: 0 1.15rem; height: 30px; font-size: .76rem;
   text-align: center; text-align-last: center;
   -webkit-appearance: none; appearance: none;
   background-image: linear-gradient(45deg, transparent 50%, var(--faint) 50%),
@@ -460,7 +474,7 @@ input[type="range"].volume { width: 5rem; flex: none; }
   position: relative; display: inline-flex; align-items: center; gap: .3rem;
   cursor: pointer; font-variant-numeric: tabular-nums;
 }
-.sleep-chip .sleep-icon { width: 13px; height: 13px; fill: currentColor; flex: none; }
+.sleep-chip .sleep-icon { width: 15px; height: 15px; fill: currentColor; flex: none; }
 .sleep-chip #sleep-label:empty { display: none; }
 .sleep-chip select {
   position: absolute; inset: 0; width: 100%; height: 100%;
@@ -472,9 +486,18 @@ input[type="range"].volume { width: 5rem; flex: none; }
 }
 
 /* ---------- responsive ---------- */
+/* Between tablet and desktop widths a centred transport leaves the chips so
+   little room that they stack three or four high. Here the chips take the
+   width they need, in two rows, and the title gives way instead. */
+@media (min-width: 861px) and (max-width: 1199px) {
+  .player-inner { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .p-extra { flex-direction: column; align-items: flex-end; }
+  .p-group { flex-wrap: nowrap; }
+}
 @media (max-width: 860px) {
   :root { --player-h: 170px; }
   .player-inner { grid-template-columns: 1fr; gap: .35rem; }
+  .p-group { display: contents; }
   .p-meta { text-align: center; justify-content: center; }
   .p-art { width: 36px; height: 36px; border-radius: 8px; }
   .p-extra { justify-content: center; }

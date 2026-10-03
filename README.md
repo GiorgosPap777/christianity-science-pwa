@@ -21,6 +21,9 @@ Greek podcast **Χριστιανισμός - Επιστήμη** (Christianity - 
   series through in order and stops at its end.
 - **New episodes** — episodes added since your last visit get a badge, a count
   on their season and a short list at the top until you play or dismiss them.
+- **Keeps itself up to date** (optional) — a second container downloads new
+  broadcasts from the official site into the archive as they appear; see
+  [Downloading new episodes automatically](#downloading-new-episodes-automatically).
 - **Share a moment** — the share button gives a link such as
   `…/_site/#e=2025-10-30&t=754` that opens that episode at that point, paused.
 - **Resume anywhere** — playback position, "continue listening", and recently
@@ -81,6 +84,42 @@ python3 serve.py       --root /path/to/archive
 If you drop this repo *inside* the archive folder, both commands work with no
 arguments.
 
+## Downloading new episodes automatically
+
+The same image can also keep the archive up to date. Run as `fetch`, it reads
+the official radio page (https://christianity-science.gr/radio.htm), downloads
+any broadcast newer than the newest one in the archive into the right season
+folder, named the way the existing folders are, and rebuilds the index. The
+player picks up the new index without a restart, and the new episode shows up
+as new for everyone.
+
+It needs the archive **read-write**, so it runs as its own container and the
+player keeps its read-only mount. With Compose, beside the player:
+
+```yaml
+  fetcher:
+    image: giorgospap777/christianity-science-pwa:latest
+    container_name: christianity-science-fetcher
+    restart: unless-stopped
+    command: ["fetch", "--every", "6h"]
+    volumes:
+      - /path/to/archive:/archive        # read-write: new episodes go here
+      - index-data:/data                 # the same volume as the player's
+    user: "1000:1000"                    # a user who owns the archive
+    healthcheck:
+      disable: true                      # the image's check is the player's
+```
+
+The player needs `index-data:/data` too, so both use one index. Each episode
+is downloaded into `.incoming/` inside the archive and moved into its season
+folder only when every part is complete; an interrupted download carries on
+from the last complete part. Older broadcasts that are missing from the
+archive are listed in the log but not downloaded, since they may be missing on
+purpose; `--include-older` fetches them as well. `--dry-run` shows what would
+be downloaded, and `--max` (default 10) caps the episodes per run.
+
+Once, by hand: `docker compose run --rm fetcher fetch --dry-run`.
+
 ## Expected archive layout
 
 ```
@@ -107,6 +146,7 @@ cannot be parsed — a missing part, non-contiguous numbering, an unreadable nam
 | `REBUILD_INDEX` | `1` | set `0` to skip the startup scan |
 | `INDEX_OUT` | `/data/index.json` (container) | generated index location |
 | `TLS_CERT` / `TLS_KEY` | unset | serve HTTPS directly |
+| `FETCH_URL` | the official radio page | where `fetch` looks for new episodes |
 
 `serve.py` also takes `--root`, `--host`, `--port`, `--cert`, `--key`.
 `build_index.py` takes `--root`, `--out`, `--no-durations`, `--jobs`, and
@@ -169,6 +209,7 @@ server-side state, no account, and no network calls beyond your own server.
 | File | Purpose |
 | --- | --- |
 | `build_index.py` | scans the archive, probes durations, writes `index.json` |
+| `fetch_new.py` | downloads new episodes from the official site into the archive, then rebuilds the index |
 | `serve.py` | Range-capable static server; serves only the app's own files and the mp3s, no directory listings |
 | `index.html` `styles.css` `app.js` `i18n.js` | the site |
 | `sw.js` | service worker: offline shell + range-aware audio cache |

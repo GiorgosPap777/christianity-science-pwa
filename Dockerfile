@@ -6,6 +6,9 @@
 #
 #   docker build -t christianity-science-pwa _site/
 #   docker run -p 8080:8080 -v "$PWD:/archive:ro" christianity-science-pwa
+#
+# Given "fetch" as its command, a second container from the same image
+# downloads new episodes into a read-write mount instead (fetch_new.py).
 
 FROM python:3.13-alpine
 

@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from urllib.parse import quote
 
@@ -135,9 +136,10 @@ def main():
 
         for ename in sorted(os.listdir(spath)):
             epath = os.path.join(spath, ename)
+            if ename.startswith("."):
+                continue
             if not os.path.isdir(epath):
-                if not ename.startswith("."):
-                    warnings.append(f"Unexpected file inside season folder: {sdir}/{ename}")
+                warnings.append(f"Unexpected file inside season folder: {sdir}/{ename}")
                 continue
 
             ep_id = f"{sdir}/{ename}"
@@ -277,12 +279,16 @@ def main():
 
     # Written beside the target and renamed over it, so the server (which
     # may be running) only ever sees the old file or the complete new one.
-    tmp = OUT_PATH + ".tmp"
+    # The temporary name is unique: the server's startup scan and the
+    # downloader's can run at the same time.
+    fd, tmp = tempfile.mkstemp(prefix=".index.", suffix=".tmp",
+                               dir=os.path.dirname(OUT_PATH) or ".")
     try:
-        with open(tmp, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(data, fh, ensure_ascii=False, separators=(",", ":"))
             fh.flush()
             os.fsync(fh.fileno())
+        os.chmod(tmp, 0o644)              # mkstemp's 0600 would hide it from other uids
         os.replace(tmp, OUT_PATH)
     except BaseException:
         try:
