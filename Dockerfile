@@ -8,7 +8,8 @@
 #   docker run -p 8080:8080 -v "$PWD:/archive:ro" christianity-science-pwa
 #
 # Given "fetch" as its command, a second container from the same image
-# downloads new episodes into a read-write mount instead (fetch_new.py).
+# downloads new episodes into a read-write mount instead (fetch_new.py), and
+# makes 64 kbps copies of high-bitrate parts in /data/lite (make_lite.py).
 
 FROM python:3.13-alpine
 
@@ -20,9 +21,10 @@ LABEL org.opencontainers.image.title="Χριστιανισμός - Επιστή�
       org.opencontainers.image.url="https://hub.docker.com/r/giorgospap777/christianity-science-pwa" \
       org.opencontainers.image.documentation="https://github.com/GiorgosPap777/christianity-science-pwa#readme" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="1.2.1"
+      org.opencontainers.image.version="1.3.0"
 
-# ffprobe supplies the per-part durations the episode progress bar needs.
+# ffprobe supplies the per-part durations the episode progress bar needs;
+# ffmpeg makes the smaller copies.
 RUN apk add --no-cache ffmpeg
 
 WORKDIR /app
@@ -37,11 +39,16 @@ RUN chmod +x /app/_site/entrypoint.sh \
 # archive's ownership). /app stays read-only; only /data is written.
 RUN install -d -m 0777 /data
 
+# SAVE_KBPS / SAVE_SLOTS pace downloads made to save an episode for offline
+# listening (see serve.py); LITE_ROOT holds the smaller copies.
 ENV ARCHIVE_ROOT=/archive \
     HOST=0.0.0.0 \
     PORT=8080 \
     REBUILD_INDEX=1 \
     INDEX_OUT=/data/index.json \
+    LITE_ROOT=/data/lite \
+    SAVE_KBPS=256 \
+    SAVE_SLOTS=2 \
     PYTHONUNBUFFERED=1
 
 USER app

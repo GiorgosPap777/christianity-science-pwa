@@ -53,6 +53,9 @@ reported in the container log rather than silently skipped.
 | `INDEX_OUT` | `/data/index.json` | where the generated index is written |
 | `TLS_CERT` / `TLS_KEY` | unset | serve HTTPS directly instead of behind a proxy |
 | `FETCH_URL` | the official radio page | where `fetch` looks for new episodes |
+| `LITE_ROOT` | `/data/lite` | the smaller 64 kbps copies (see below) |
+| `SAVE_KBPS` | `256` | speed of each offline save, in kbit/s; `0` is full speed |
+| `SAVE_SLOTS` | `2` | offline saves running at once, across all listeners; `0` is no limit |
 
 Runs as **uid 10001**. If your archive is not readable by that user, add
 `--user "$(id -u):$(id -g)"` — the index is written to `/data`, which any uid
@@ -93,13 +96,35 @@ archive are listed in the log but not downloaded, since they may be missing on
 purpose; `--include-older` fetches them as well. `--dry-run` shows what would
 be downloaded, and `--max` (default 10) caps the episodes per run.
 
+The site sometimes lists a broadcast before all of its parts are up: a new
+episode with fewer than the usual 4 parts waits and is completed on a later
+run, or saved as it is after 3 days, and a recent episode that the site now
+lists with more parts gets the missing ones.
+
 Once, by hand: `docker compose run --rm fetcher fetch --dry-run`.
+
+## Smaller copies
+
+The newest seasons are 112–192 kbps, two to three times the size of the
+64 kbps older ones for the same speech. The `lite` command writes a 64 kbps
+mono copy of every part above 80 kbps to `/data/lite` (the archive is only
+read), and the index then points at the copies, so a listener needs a
+third to a half of the bandwidth. Run it once for the whole archive (about
+3.8 GB of copies; it takes a while, at low priority):
+
+```bash
+docker compose run --rm fetcher lite
+```
+
+After that the fetcher makes copies of new episodes as they arrive. The
+player and the fetcher must share the `/data` volume.
 
 ## What it does
 
 - Continuous playback across an episode's parts; optional autoplay into the
   next episode, across season boundaries.
-- A **Series** view of multi-part runs, each playable start to finish.
+- Multi-part series shown as one row in their season, playable start to
+  finish, and opened with a tap to show the parts.
 - "New" badges on episodes added since your last visit.
 - Share links that open an episode at a given moment.
 - Resume where you left off, per-episode listened tracking, "unheard only"
@@ -110,16 +135,16 @@ Once, by hand: `docker compose run --rm fetcher fetch --dry-run`.
 - Greek/English interface toggle and a light/dark theme. Episode titles are
   never translated.
 - **Installable (PWA)** — full screen, own home-screen icon, works offline.
-- **Offline caching** — the episode you are listening to is kept on the device
-  so playback survives a tunnel. Bounded to the 3 most recent episodes, and
-  paced so a few listeners cannot saturate a home uplink.
+- **Save for offline** — a button in the player saves an episode to the
+  device; nothing is downloaded unless you ask. The server paces saves
+  (`SAVE_KBPS`, `SAVE_SLOTS`) so they cannot saturate a home uplink.
 
 ## Two things that will bite you
 
 1. **Behind a reverse proxy, `Range` headers must be forwarded and responses
    must not be buffered**, or seeking inside an episode breaks. (nginx:
    `proxy_buffering off;`)
-2. **Installing the app and offline caching require HTTPS** (or `localhost`).
+2. **Installing the app and saving for offline require HTTPS** (or `localhost`).
    On a plain `http://192.168.x.x` the site works, but neither feature turns on.
 
 ## Tags

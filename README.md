@@ -19,8 +19,9 @@ Greek podcast **Χριστιανισμός - Επιστήμη** (Christianity - 
   have already heard, unless the one that just ended was itself a replay:
   then you are going back through old episodes, and it carries on in order.
 - **Series** — multi-part runs ("Εσχατολογικά - Μέρος 1ο … 7ο") are found from
-  the titles and listed in a **Series** view, with a button that plays the
-  series through in order and stops at its end.
+  the titles and shown in their season as a single row. Its play button plays
+  the series through in order, whether autoplay is on or not, and stops at
+  its end; tap the row to open it and see the parts, Μέρος 1ο first.
 - **New episodes** — episodes added since your last visit get a badge, a count
   on their season and a short list at the top until you play or dismiss them.
 - **Keeps itself up to date** (optional) — a second container downloads new
@@ -49,9 +50,12 @@ Greek podcast **Χριστιανισμός - Επιστήμη** (Christianity - 
 - **Light / dark theme** — follows the device, or set it with the button in
   the header.
 - **Installable (PWA)** — full screen, its own home-screen icon, works offline.
-- **Offline caching** — the episode you are listening to is stored on the
-  device, so playback survives a tunnel or a dead spot. Saved episodes carry a
-  cloud mark in the list.
+- **Save for offline** — the cloud chip in the player saves the episode to the
+  device, to play on a plane or in a dead spot. Nothing is downloaded unless
+  you ask. Saved episodes carry a cloud mark in the list.
+- **Smaller copies** (optional) — 64 kbps copies of the newest seasons'
+  high-bitrate parts, for streaming over a home uplink; see
+  [Smaller copies](#smaller-copies).
 - Scrubbing, ±15 s, part/episode skip, playback speed, OS media keys, and a
   mobile-friendly layout.
 - **Keyboard** — Space or K play/pause, ←/→ ±15 s, Shift+←/→ part,
@@ -120,7 +124,49 @@ archive are listed in the log but not downloaded, since they may be missing on
 purpose; `--include-older` fetches them as well. `--dry-run` shows what would
 be downloaded, and `--max` (default 10) caps the episodes per run.
 
+The site sometimes lists a broadcast before all of its parts are up. A new
+episode with fewer than the usual 4 parts waits in `.incoming/` and is
+completed on a later run, or saved as it is once it has looked the same for 3
+days. An episode from the last 60 days that the site now lists with more parts
+than the archive has gets the missing ones.
+
+When `LITE_ROOT` points at a folder (the image sets `/data/lite`), each run
+also makes [smaller copies](#smaller-copies) of new high-bitrate parts.
+
 Once, by hand: `docker compose run --rm fetcher fetch --dry-run`.
+
+## Smaller copies
+
+Seasons 1–15 are 64 kbps mono, but the newest seasons are 112–192 kbps, two
+to three times the size for the same speech. On a home uplink shared by every
+listener, that size decides how many can listen at once. `make_lite.py`
+writes a 64 kbps mono copy of every part above 80 kbps into a separate folder
+that mirrors the archive's layout. The archive itself is only read.
+
+`build_index.py` points the index at a copy when it exists and is at least as
+new as its original, and `serve.py` serves the copies under `/_lite/`. Parts
+without a copy, and copies older than their original, use the original.
+
+The image keeps the copies in `/data/lite`, so the player and the fetcher need
+the same `/data` volume. Make the copies for the whole archive once (the first
+run encodes every high-bitrate part, about 3.8 GB, and takes a while; it runs
+at low priority):
+
+```bash
+docker compose run --rm fetcher lite
+```
+
+After that the fetcher makes copies of new episodes as they arrive. Run `lite`
+as the same user as the fetcher, as the command above does, since each needs
+to write where the other has. Without the fetcher, run `lite` from the
+player's service instead. `lite --dry-run` lists what would be encoded, and `--limit N` stops
+after N parts. Without Docker:
+
+```bash
+python3 make_lite.py  --root /path/to/archive --lite /path/to/copies
+python3 build_index.py --root /path/to/archive --lite /path/to/copies
+python3 serve.py       --root /path/to/archive --lite /path/to/copies
+```
 
 ## Expected archive layout
 
@@ -149,10 +195,13 @@ cannot be parsed — a missing part, non-contiguous numbering, an unreadable nam
 | `INDEX_OUT` | `/data/index.json` (container) | generated index location |
 | `TLS_CERT` / `TLS_KEY` | unset | serve HTTPS directly |
 | `FETCH_URL` | the official radio page | where `fetch` looks for new episodes |
+| `LITE_ROOT` | `/data/lite` (container) | the [smaller copies](#smaller-copies); unset, none are used |
+| `SAVE_KBPS` | `256` | speed of each offline save, in kbit/s; `0` is full speed |
+| `SAVE_SLOTS` | `2` | offline saves running at once, across all listeners; `0` is no limit |
 
-`serve.py` also takes `--root`, `--host`, `--port`, `--cert`, `--key`.
-`build_index.py` takes `--root`, `--out`, `--no-durations`, `--jobs`, and
-`--allow-empty`. The index is replaced in one step, so a rebuild on a running
+`serve.py` also takes `--root`, `--lite`, `--host`, `--port`, `--cert`,
+`--key`. `build_index.py` takes `--root`, `--lite`, `--out`, `--no-durations`,
+`--jobs`, and `--allow-empty`. The index is replaced in one step, so a rebuild on a running
 server is safe, and a scan that finds no episodes (an archive mount that is
 briefly missing) keeps the previous index unless `--allow-empty` is given.
 
@@ -161,9 +210,9 @@ briefly missing) keeps the previous index unless `--allow-empty` is given.
 1. **Behind a reverse proxy, `Range` headers must be forwarded and responses
    must not be buffered**, or seeking inside an episode breaks. In nginx that
    means `proxy_buffering off;`.
-2. **Installing the app and offline caching require a secure origin** — HTTPS,
-   or `localhost`. On a plain `http://192.168.x.x` the site works normally, but
-   neither the install prompt nor offline caching will turn on.
+2. **Installing the app and saving for offline require a secure origin** —
+   HTTPS, or `localhost`. On a plain `http://192.168.x.x` the site works
+   normally, but neither the install prompt nor the Save button will appear.
 
 ## Why a custom server
 
@@ -173,27 +222,27 @@ adds `206 Partial Content`, which is what makes scrubbing work. The service
 worker does the same for cached audio, slicing byte ranges out of stored
 responses.
 
-## Offline caching, specifically
+## Saving for offline, specifically
 
-When an episode starts, the parts *ahead* of the current one download first —
-the part you are on is already being buffered by the audio element, so it is
-fetched last and nothing is downloaded twice. Once the episode is complete,
-part 1 of the next episode is fetched so autoplay does not stall either.
+Nothing is saved unless the listener asks: the cloud chip in the player shows
+the episode's size, and tapping it saves every part to the device. While it
+saves, the chip shows progress, and tapping it again stops. Once saved, the
+episode plays with no network, seeking included, and tapping the chip offers
+to delete it. Saving more episodes queues them; there is no cap beyond the
+device's storage, which is checked first.
 
-Saving is **paced at 4× the audio bitrate** (~32 KB/s for the usual 64 kbps
-parts) instead of downloading as fast as the link allows. On a ~5 Mbps home
-uplink that keeps 15 simultaneous listeners under budget, and it still
-finishes a whole episode while its first part plays. `PREFETCH_SPEEDUP` in
-`app.js` changes the multiple; `0` means full speed.
-
-Only the **3 most recent episodes** are kept (~150 MB); older ones are evicted
-automatically. The lookahead part of the next episode does not count against
-that limit. The cloud chip in the player shows progress — tap it to turn
-caching off and clear what is stored.
+A browser downloads as fast as the link allows, whatever the page asks, so
+the pacing happens on the server. A save asks for each part with `?save=1`,
+and `serve.py` sends those at `SAVE_KBPS` (256 kbit/s, four times the 64 kbps
+listening rate) and runs at most `SAVE_SLOTS` (2) at once, across everyone.
+Further saves get `503` with `Retry-After` and the app tries again shortly,
+so offline saves never take more than about 0.5 Mbit/s of the uplink. Normal
+listening is not paced.
 
 ## Stored state
 
-Everything is per-browser `localStorage` under the `cs:v1:` prefix. There is no
+Everything is per-browser `localStorage` under the `cs:v1:` prefix, and saved
+audio is in the browser's Cache Storage (`cs-audio-v1`). There is no
 server-side state, no account, and no network calls beyond your own server.
 
 | Key | Contents |
@@ -203,8 +252,11 @@ server-side state, no account, and no network calls beyond your own server.
 | `cs:v1:listened` | listened episodes |
 | `cs:v1:last` | the "continue listening" target |
 | `cs:v1:recent` | recently played |
-| `cs:v1:ui` | sort order, filters, open seasons, volume, speed, offline caching |
-| `cs:v1:cachedEps` | fully saved episodes in the offline audio cache, newest first |
+| `cs:v1:seen` | episodes no longer shown as new |
+| `cs:v1:ui` | sort order, filter, open seasons and series, volume, speed, autoplay |
+| `cs:v1:cachedEps` | episodes saved for offline, newest first |
+| `cs:v1:theme` | `light` or `dark`, when set by hand instead of following the device |
+| `cs:v1:installDismissed` | the install card was dismissed |
 
 ## Files
 
@@ -212,6 +264,7 @@ server-side state, no account, and no network calls beyond your own server.
 | --- | --- |
 | `build_index.py` | scans the archive, probes durations, writes `index.json` |
 | `fetch_new.py` | downloads new episodes from the official site into the archive, then rebuilds the index |
+| `make_lite.py` | makes 64 kbps copies of the high-bitrate parts in a separate folder |
 | `serve.py` | Range-capable static server; serves only the app's own files and the mp3s, no directory listings |
 | `index.html` `styles.css` `app.js` `i18n.js` | the site |
 | `sw.js` | service worker: offline shell + range-aware audio cache |

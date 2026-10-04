@@ -12,24 +12,28 @@ services:
       # EDIT THIS PATH -- the folder holding the "<N>ος Κύκλος Εκπομπών"
       # season directories. Read-only: the app never writes to your archive.
       - /path/to/christianity-science:/archive:ro
+      # The generated index and the smaller copies (/data/lite). Shared with
+      # the downloader below, which rebuilds the same index.
+      - index-data:/data
     environment:
       # 0 skips the startup scan and reuses the previous index
       REBUILD_INDEX: "1"
+      # Saving an episode for offline listening is paced to this many kbit/s,
+      # with at most SAVE_SLOTS saves at once across all listeners.
+      # SAVE_KBPS: "256"
+      # SAVE_SLOTS: "2"
 
     # Runs as uid 10001 by default. Most archives are world-readable, so this
     # is usually fine. If yours is not, uncomment and match your host user --
     # the index is written to /data, which any uid can write.
     # user: "1000:1000"
 
-    # Optional: persist the generated index so REBUILD_INDEX=0 is useful.
-    # Needed, too, by the downloader below, which rebuilds this same index.
-    # volumes:
-    #   - index-data:/data
-
   # Optional: download new episodes from the official site into the archive
-  # every 6 hours. It needs the archive read-write, so it runs on its own and
-  # the player above keeps its read-only mount. See "Downloading new episodes
-  # automatically" in the README.
+  # every 6 hours, and make 64 kbps copies of new high-bitrate parts. It needs
+  # the archive read-write, so it runs on its own and the player above keeps
+  # its read-only mount. See "Downloading new episodes automatically" in the
+  # README. To make copies of the whole archive once (slow, low priority):
+  #   docker compose run --rm fetcher lite
   # fetcher:
   #   image: giorgospap777/christianity-science-pwa:latest
   #   container_name: christianity-science-fetcher
@@ -42,5 +46,5 @@ services:
   #   healthcheck:
   #     disable: true
 
-# volumes:
-#   index-data:
+volumes:
+  index-data:
