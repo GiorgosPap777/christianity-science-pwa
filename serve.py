@@ -8,8 +8,12 @@ Unlike `python3 -m http.server`, this handles HTTP Range requests (206 Partial
 Content), which is what lets the browser seek inside a part without first
 downloading the whole file.
 
-Two things protect a small home uplink shared by every listener:
+Three things protect a small home uplink shared by every listener:
 
+- Listening is paced: after the first PLAY_BURST bytes, an mp3 response goes
+  at PLAY_KBPS. Otherwise the browser pulls the rest of the part as fast as
+  the line allows, and that queue (the router's, and the proxy's socket) is
+  what the next seek -- anyone's -- waits behind.
 - A download made to save an episode for offline listening (the app adds
   ?save=1) is sent at SAVE_KBPS, and at most SAVE_SLOTS of them run at once;
   the rest get 503 and a Retry-After, and the app tries again later. Pacing
@@ -23,6 +27,7 @@ Usage:
 """
 
 import argparse
+import functools
 import os
 import re
 import shutil
@@ -33,6 +38,8 @@ import urllib.parse
 import sys
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+from make_lite import mp3_kbps
 
 SITE_DIR = os.path.dirname(os.path.abspath(__file__))
 # In a container the audio is a separate mount, so the archive root is
@@ -62,6 +69,17 @@ SAVE_SLOTS = env_int("SAVE_SLOTS", 2)
 SAVE_RETRY_AFTER = 30        # seconds, for a save turned away while slots are full
 _save_slots = threading.BoundedSemaphore(SAVE_SLOTS) if SAVE_SLOTS else None
 
+# Listening: kbit/s after the first PLAY_BURST bytes (0 = unpaced). 512 keeps
+# a 64 kbps part 8x ahead of playback; the burst gets playback going at once.
+# A part above 128 kbps (one with no smaller copy) gets PLAY_AHEAD times its
+# own rate instead.
+PLAY_KBPS = env_int("PLAY_KBPS", 512)
+PLAY_BURST = env_int("PLAY_BURST", 128 * 1024)
+PLAY_AHEAD = 4
+# A client that fell behind (a phone in a tunnel) catches up with at most
+# this many seconds' worth at full speed, not with everything it missed.
+PACE_SLACK = 1.0
+
 RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 NO_CACHE_EXT = (".html", ".js", ".css", ".json", ".webmanifest")
 # Clients that hang up mid-transfer -- routine for <audio>, not an error. A
@@ -83,6 +101,12 @@ HANDSHAKE_TIMEOUT = 15
 IDLE_TIMEOUT = 120
 
 
+@functools.lru_cache(maxsize=4096)
+def part_kbps(path, mtime, size):
+    """The bitrate of a part, read once per version of the file."""
+    return mp3_kbps(path)
+
+
 class ArchiveHandler(SimpleHTTPRequestHandler):
     """Static handler with byte-range support and a redirect from / to the site."""
 
@@ -94,7 +118,8 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
 
     def __init__(self, *args, **kwargs):
         self._range = None  # (start, length) for the in-flight response
-        self._save = False  # the in-flight response is an offline save (paced)
+        self._save = False  # the in-flight response is an offline save
+        self._mp3 = False   # the in-flight response is audio (paced too)
         super().__init__(*args, directory=ARCHIVE_ROOT, **kwargs)
 
     def do_GET(self):
@@ -102,7 +127,8 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
         runs. With all of them busy it is turned away at once rather than
         queued here, where it would hold a connection open doing nothing."""
         split = urllib.parse.urlsplit(self.path)
-        self._save = (split.path.lower().endswith(".mp3") and
+        self._mp3 = split.path.lower().endswith(".mp3")
+        self._save = (self._mp3 and
                       "1" in urllib.parse.parse_qs(split.query).get("save", []))
         if self._save and _save_slots and not _save_slots.acquire(blocking=False):
             self.send_response(HTTPStatus.SERVICE_UNAVAILABLE)
@@ -117,7 +143,7 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
                 _save_slots.release()
 
     def do_HEAD(self):
-        self._save = False       # the handler is reused across keep-alive requests
+        self._save = self._mp3 = False   # reused across keep-alive requests
         super().do_HEAD()
 
     # -- routing ---------------------------------------------------------
@@ -249,31 +275,51 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
             fh.close()
             raise
 
+    def pace(self, source):
+        """(bytes/s, unpaced bytes first) for the in-flight response; 0 bytes/s
+        sends it at full speed."""
+        if self._save:
+            return SAVE_KBPS * 1000 / 8, 0
+        if not (self._mp3 and PLAY_KBPS):
+            return 0, 0
+        kbps = PLAY_KBPS
+        try:
+            st = os.fstat(source.fileno())
+            kbps = max(kbps, PLAY_AHEAD * (part_kbps(source.name, st.st_mtime, st.st_size) or 0))
+        except (OSError, AttributeError, TypeError):
+            pass
+        return kbps * 1000 / 8, PLAY_BURST
+
     def copyfile(self, source, outputfile):
-        if self._range is None and not (self._save and SAVE_KBPS):
+        rate, burst = self.pace(source)
+        if self._range is None and not rate:
             try:
                 return super().copyfile(source, outputfile)
             except CLIENT_GONE:
                 return None
-        remaining = self._range[1] if self._range else None   # None: to the end
+        if self._range:
+            remaining = self._range[1]
+        else:
+            remaining = os.fstat(source.fileno()).st_size - source.tell()
         # Small chunks when paced, so the line sees an even trickle rather
         # than 64 KB bursts with long gaps.
-        size = 16 * 1024 if self._save and SAVE_KBPS else 64 * 1024
-        rate = SAVE_KBPS * 1000 / 8 if self._save else 0       # bytes/s
-        started, sent = time.monotonic(), 0
+        size = 16 * 1024 if rate else 64 * 1024
+        sent, due = 0, None      # due: when the next chunk may go out
         try:
-            while remaining is None or remaining > 0:
-                chunk = source.read(size if remaining is None else min(size, remaining))
+            while remaining > 0:
+                chunk = source.read(min(size, remaining))
                 if not chunk:
                     break
                 outputfile.write(chunk)
                 sent += len(chunk)
-                if remaining is not None:
-                    remaining -= len(chunk)
-                if rate:
-                    ahead = sent / rate - (time.monotonic() - started)
-                    if ahead > 0:
-                        time.sleep(ahead)
+                remaining -= len(chunk)
+                # No wait after the last chunk: a save would hold its slot,
+                # and the next request on this connection would wait too.
+                if rate and remaining > 0 and sent >= burst:
+                    now = time.monotonic()
+                    due = max(due or now, now - PACE_SLACK) + len(chunk) / rate
+                    if due > now:
+                        time.sleep(due - now)
         except CLIENT_GONE:
             pass          # client seeked away or closed the tab
 
@@ -395,6 +441,8 @@ def main():
         print(f"  index   : {INDEX_OUT}")
     if LITE_ROOT:
         print(f"  lite    : {LITE_ROOT}")
+    print(f"  playback: " + (f"{PLAY_KBPS} kbit/s after {PLAY_BURST // 1024} KB" if PLAY_KBPS
+                             else "unpaced"))
     print(f"  saves   : " + (f"{SAVE_KBPS} kbit/s each" if SAVE_KBPS else "unpaced") +
           (f", {SAVE_SLOTS} at once" if SAVE_SLOTS else ""))
     print(f"  open    : {url}")

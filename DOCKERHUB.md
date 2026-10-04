@@ -54,6 +54,8 @@ reported in the container log rather than silently skipped.
 | `TLS_CERT` / `TLS_KEY` | unset | serve HTTPS directly instead of behind a proxy |
 | `FETCH_URL` | the official radio page | where `fetch` looks for new episodes |
 | `LITE_ROOT` | `/data/lite` | the smaller 64 kbps copies (see below) |
+| `PLAY_KBPS` | `512` | listening speed after the first `PLAY_BURST` bytes of each request, in kbit/s; `0` is full speed |
+| `PLAY_BURST` | `131072` | bytes sent at full speed first, so playback starts at once |
 | `SAVE_KBPS` | `256` | speed of each offline save, in kbit/s; `0` is full speed |
 | `SAVE_SLOTS` | `2` | offline saves running at once, across all listeners; `0` is no limit |
 
@@ -138,6 +140,9 @@ player and the fetcher must share the `/data` volume.
 - **Save for offline** — a button in the player saves an episode to the
   device; nothing is downloaded unless you ask. The server paces saves
   (`SAVE_KBPS`, `SAVE_SLOTS`) so they cannot saturate a home uplink.
+- **Quick seeking on a small uplink** — listening is paced too (`PLAY_KBPS`,
+  after a `PLAY_BURST` sent at once), so a seek never waits behind the rest
+  of a part already on its way.
 
 ## Two things that will bite you
 

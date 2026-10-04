@@ -444,16 +444,16 @@ function episodeRow(ep) {
   if (isListened(ep.id)) row.classList.add("listened");
   if (cur && cur.ep === ep) row.classList.add("playing");
 
-  const play = document.createElement("button");
-  play.type = "button";
-  play.className = "ep-play";
-  setRowButton(play, ep);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "ep-play";
+  setRowButton(btn, ep);
   const start = () => {
     if (cur && cur.ep === ep) { togglePlay(); return; }
     const p = resumeAt(ep);
     loadEpisode(ep, p.part, p.time, true);
   };
-  play.addEventListener("click", start);
+  btn.addEventListener("click", start);
 
   /* Most of the row is the title: tapping it plays, as in any podcast app.
      The play button stays the control for keyboards and screen readers. */
@@ -537,7 +537,7 @@ function episodeRow(ep) {
     render();
   });
 
-  row.appendChild(play);
+  row.appendChild(btn);
   row.appendChild(main);
   row.appendChild(check);
   return row;
@@ -579,12 +579,14 @@ function listGroups() {
 }
 
 /* A season's episodes in display order. Outside a search, two or more parts
-   of one series become a single series row, where the first of them would
-   be; one part on its own stays an ordinary row. */
-function appendRows(host, eps, flat) {
+   of one series in the season become a single series row, where the first
+   of them shown would be; one part on its own stays an ordinary row. `all`
+   is the whole season: with "unheard only" on, a series row still counts
+   and lists all of its parts, and the filter only decides whether it shows. */
+function appendRows(host, eps, flat, all) {
   const shown = Object.create(null);         // series id -> its episodes here
   if (!flat) {
-    for (const ep of eps) {
+    for (const ep of all || eps) {
       const sr = SERIES_OF[ep.id];
       if (sr) (shown[sr.id] = shown[sr.id] || []).push(ep);
     }
@@ -642,11 +644,11 @@ function seriesRow(series, eps) {
   if (heard === eps.length) head.classList.add("listened");
   if (cur && eps.indexOf(cur.ep) !== -1) head.classList.add("playing");
 
-  const play = document.createElement("button");
-  play.type = "button";
-  play.className = "ep-play series-play";
-  setSeriesButton(play, series);
-  play.addEventListener("click", () => {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "ep-play series-play";
+  setSeriesButton(btn, series);
+  btn.addEventListener("click", () => {
     if (cur && series.eps.indexOf(cur.ep) !== -1) {
       if (isPlaying()) { audio.pause(); return; }
       queue = series;                              // carry on through the series
@@ -698,7 +700,7 @@ function seriesRow(series, eps) {
     renderSeasons();
   });
 
-  head.appendChild(play);
+  head.appendChild(btn);
   head.appendChild(main);
   box.appendChild(head);
 
@@ -816,7 +818,8 @@ function renderSeasons() {
     if (open) {
       const body = document.createElement("div");
       body.className = "season-body";
-      appendRows(body, store.ui.sort === "newest" ? eps.slice().reverse() : eps, searching);
+      appendRows(body, store.ui.sort === "newest" ? eps.slice().reverse() : eps, searching,
+        g.episodes);
       sec.appendChild(body);
     }
     host.appendChild(sec);
@@ -1032,6 +1035,7 @@ function loadEpisode(ep, part, time, autoplay, quiet) {
     if (p && p.catch) p.catch(() => {});
   }
   updatePlayerText();
+  updateTimes();             // the new part's length and start, before its metadata
   updateMediaSession();
   render();
 }
@@ -1041,10 +1045,37 @@ function noteRecent(id) {
   update("recent", (r) => [id].concat(r.filter((x) => x !== id)).slice(0, 20));
 }
 
-function skip(delta) {
-  if (!cur || !isFinite(audio.duration)) return;
-  audio.currentTime = Math.max(0, Math.min(audio.duration, audio.currentTime + delta));
+/* Where playback is in the part. Until a loaded part's metadata arrives,
+   that is where it will start (pendingSeek), not the element's 0; after a
+   load error, where it stopped. */
+function posInPart() {
+  return audio.error ? lastGood : pendingSeek > 0 ? pendingSeek : (audio.currentTime || 0);
+}
+
+/* The part's length: the index's figure until the element knows it. */
+function partDur() {
+  if (isFinite(audio.duration) && audio.duration > 0) return audio.duration;
+  return cur ? cur.ep.parts[cur.part].dur || 0 : 0;
+}
+
+/* A seek by the listener: the seek bar, the skip buttons, the lock screen.
+   While a part is still loading, the loadedmetadata handler applies
+   pendingSeek, which would undo a currentTime set now, so the target
+   replaces pendingSeek instead. */
+function seekTo(time) {
+  if (!cur) return;
+  const dur = partDur();
+  time = Math.max(0, dur ? Math.min(dur, time) : time);
+  if (audio.error) lastGood = time;                // play() reloads from here
+  else if (audio.readyState === 0 || pendingSeek > 0) pendingSeek = lastGood = time;
+  else audio.currentTime = time;
   takeOver();
+  persistPosition(true);
+  updateTimes();
+}
+
+function skip(delta) {
+  if (cur) seekTo(posInPart() + delta);
 }
 
 function play() {
@@ -1229,8 +1260,7 @@ function persistPosition(force) {
   const now = Date.now();
   if (!force && now - lastSave < 5000) return;
   lastSave = now;
-  const time = audio.error ? lastGood
-    : pendingSeek > 0 ? pendingSeek : (audio.currentTime || 0);
+  const time = posInPart();
   const id = cur.ep.id, part = cur.part;
   /* Merely put in place (autoplay off) is not a start: no "part 1/4" mark
      on an episode nobody has played yet. */
@@ -1298,16 +1328,18 @@ function setFill(el) {
 }
 
 function updateTimes() {
-  const dur = isFinite(audio.duration) ? audio.duration : 0;
-  const t0 = audio.currentTime || 0;
-  $("#t-cur").textContent = fmtTime(t0);
-  $("#t-dur").textContent = fmtTime(dur);
+  const dur = partDur();
+  const t0 = posInPart();
   const seek = $("#seek");
+  // While the knob is held, the label shows where letting go will land.
+  const shown = scrubbing ? parseFloat(seek.value) : t0;
+  $("#t-cur").textContent = fmtTime(shown);
+  $("#t-dur").textContent = fmtTime(dur);
   seek.max = dur || 1;
   if (!scrubbing) seek.value = t0;
   setFill(seek);
   seek.setAttribute("aria-valuetext",
-    t("player.seekValue", { cur: fmtTime(t0), dur: fmtTime(dur) }));
+    t("player.seekValue", { cur: fmtTime(shown), dur: fmtTime(dur) }));
 
   if (cur) {
     const total = epTotal(cur.ep);
@@ -1518,12 +1550,19 @@ function wire() {
   const commit = () => {
     if (!scrubbing) return;
     scrubbing = false;
-    audio.currentTime = parseFloat(seek.value);
-    takeOver();
-    persistPosition(true);
+    seekTo(parseFloat(seek.value));
   };
   seek.addEventListener("change", commit);
   seek.addEventListener("pointerup", commit);
+  /* A drag can end with neither: the browser took the touch for a scroll,
+     or focus left mid-drag. The bar then follows playback again. */
+  const drop = () => {
+    if (!scrubbing) return;
+    scrubbing = false;
+    updateTimes();
+  };
+  seek.addEventListener("pointercancel", drop);
+  seek.addEventListener("blur", drop);
 
   /* speed + volume */
   const speed = $("#speed");
@@ -1664,7 +1703,7 @@ function wire() {
        episodes. Previous restarts the part first, like most players. */
     set("previoustrack", () => {
       if (!cur) return;
-      if ((audio.currentTime || 0) > 3) { audio.currentTime = 0; takeOver(); return; }
+      if (posInPart() > 3) { seekTo(0); return; }
       if (cur.part > 0) { goPart(-1); return; }
       const pv = neighbour(cur.ep, -1);
       if (pv) loadEpisode(pv, pv.parts.length - 1, 0, true);
@@ -1676,10 +1715,7 @@ function wire() {
     set("seekbackward", (d) => skip(-((d && d.seekOffset) || 15)));
     set("seekforward", (d) => skip((d && d.seekOffset) || 15));
     set("seekto", (d) => {
-      if (!cur || !d || !isFinite(d.seekTime) || !isFinite(audio.duration)) return;
-      audio.currentTime = Math.max(0, Math.min(audio.duration, d.seekTime));
-      takeOver();
-      persistPosition(true);
+      if (d && isFinite(d.seekTime)) seekTo(d.seekTime);
     });
   }
 }
@@ -1819,7 +1855,7 @@ function linkFor(ep, at) {
 async function shareLink() {
   if (!cur) return;
   const ep = cur.ep;
-  const inPart = pendingSeek > 0 ? pendingSeek : (audio.currentTime || 0);
+  const inPart = posInPart();
   const at = elapsedBefore(ep, cur.part) + inPart;
   const url = linkFor(ep, at);
   const text = at >= 5 ? ep.title + " (" + partTime(ep, cur.part, inPart) + ")" : ep.title;
@@ -2054,6 +2090,10 @@ function wireNowPlaying() {
    serves saved parts back with byte-range support; see sw.js. */
 
 const AUDIO_CACHE = "cs-audio-v1";
+/* Held, with the episode's id after it, for as long as a save runs, so a
+   prune in another tab leaves its parts alone. The browser drops it if the
+   tab closes. */
+const SAVE_LOCK = "cs-saving:";
 const SAVE_RETRY_MS = 30000;           // when the server says busy without a Retry-After
 
 const saving = {
@@ -2174,8 +2214,13 @@ async function pumpSaves() {
   saving.ctl = new AbortController();
   renderOfflineChip();
   try {
-    await saveEpisode(ep, saving.ctl.signal);
-    noteCached(ep.id);
+    const run = async () => {
+      await saveEpisode(ep, saving.ctl.signal);
+      noteCached(ep.id);                           // before the lock goes
+    };
+    await (navigator.locks
+      ? navigator.locks.request(SAVE_LOCK + ep.id, { signal: saving.ctl.signal }, run)
+      : run());
     showToast(t("offline.done", { title: ep.title }));
   } catch (err) {
     if (!saving.ctl.signal.aborted) {
@@ -2270,7 +2315,7 @@ async function deleteSaved(ep) {
   renderSeasons();
 }
 
-/* Keeps the cache to the episodes saved whole, and the one being saved.
+/* Keeps the cache to the episodes saved whole, and the ones being saved.
    Removes leftovers: a stopped save's parts, or parts the index no longer
    points at (an episode now served from a smaller copy). Also reconciles
    cachedEps with what is really stored: the browser may evict on its own. */
@@ -2288,6 +2333,13 @@ async function pruneAudioCache() {
   const keepEp = (ep) => ep.parts.forEach((p) => keep.add(pathOf(p.url)));
   keepIds.forEach((id) => keepEp(BY_ID[id]));
   if (saving.ep) keepEp(saving.ep);
+  if (navigator.locks && navigator.locks.query) {   // saves running in other tabs
+    const locks = await navigator.locks.query().catch(() => ({}));
+    for (const l of (locks.held || []).concat(locks.pending || [])) {
+      const id = l.name && l.name.indexOf(SAVE_LOCK) === 0 && l.name.slice(SAVE_LOCK.length);
+      if (id && BY_ID[id]) keepEp(BY_ID[id]);
+    }
+  }
   for (const req of keys) {
     if (!keep.has(new URL(req.url).pathname)) await cache.delete(req);
   }

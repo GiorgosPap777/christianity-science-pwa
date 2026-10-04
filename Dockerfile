@@ -21,7 +21,7 @@ LABEL org.opencontainers.image.title="Χριστιανισμός - Επιστή�
       org.opencontainers.image.url="https://hub.docker.com/r/giorgospap777/christianity-science-pwa" \
       org.opencontainers.image.documentation="https://github.com/GiorgosPap777/christianity-science-pwa#readme" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="1.3.0"
+      org.opencontainers.image.version="1.3.1"
 
 # ffprobe supplies the per-part durations the episode progress bar needs;
 # ffmpeg makes the smaller copies.
@@ -39,14 +39,17 @@ RUN chmod +x /app/_site/entrypoint.sh \
 # archive's ownership). /app stays read-only; only /data is written.
 RUN install -d -m 0777 /data
 
-# SAVE_KBPS / SAVE_SLOTS pace downloads made to save an episode for offline
-# listening (see serve.py); LITE_ROOT holds the smaller copies.
+# PLAY_KBPS / PLAY_BURST pace listening, and SAVE_KBPS / SAVE_SLOTS the
+# downloads made to save an episode for offline listening (see serve.py);
+# LITE_ROOT holds the smaller copies.
 ENV ARCHIVE_ROOT=/archive \
     HOST=0.0.0.0 \
     PORT=8080 \
     REBUILD_INDEX=1 \
     INDEX_OUT=/data/index.json \
     LITE_ROOT=/data/lite \
+    PLAY_KBPS=512 \
+    PLAY_BURST=131072 \
     SAVE_KBPS=256 \
     SAVE_SLOTS=2 \
     PYTHONUNBUFFERED=1

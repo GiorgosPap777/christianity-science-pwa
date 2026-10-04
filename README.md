@@ -55,6 +55,9 @@ Greek podcast **Χριστιανισμός - Επιστήμη** (Christianity - 
   you ask. Saved episodes carry a cloud mark in the list.
 - **Smaller copies** (optional) — 64 kbps copies of the high-bitrate parts, for streaming over a home uplink; see
   [Smaller copies](#smaller-copies).
+- **Quick seeking on a small uplink** — the server paces listening, so a seek
+  does not wait behind the rest of a part already on its way; see
+  [Why listening is paced too](#why-listening-is-paced-too).
 - Scrubbing, ±15 s, part/episode skip, playback speed, OS media keys, and a
   mobile-friendly layout.
 - **Keyboard** — Space or K play/pause, ←/→ ±15 s, Shift+←/→ part,
@@ -196,6 +199,8 @@ cannot be parsed — a missing part, non-contiguous numbering, an unreadable nam
 | `TLS_CERT` / `TLS_KEY` | unset | serve HTTPS directly |
 | `FETCH_URL` | the official radio page | where `fetch` looks for new episodes |
 | `LITE_ROOT` | `/data/lite` (container) | the [smaller copies](#smaller-copies); unset, none are used |
+| `PLAY_KBPS` | `512` | listening speed after the first `PLAY_BURST` bytes of each request, in kbit/s; `0` is full speed |
+| `PLAY_BURST` | `131072` | bytes sent at full speed first, so playback starts at once |
 | `SAVE_KBPS` | `256` | speed of each offline save, in kbit/s; `0` is full speed |
 | `SAVE_SLOTS` | `2` | offline saves running at once, across all listeners; `0` is no limit |
 
@@ -236,8 +241,22 @@ the pacing happens on the server. A save asks for each part with `?save=1`,
 and `serve.py` sends those at `SAVE_KBPS` (256 kbit/s, four times the 64 kbps
 listening rate) and runs at most `SAVE_SLOTS` (2) at once, across everyone.
 Further saves get `503` with `Retry-After` and the app tries again shortly,
-so offline saves never take more than about 0.5 Mbit/s of the uplink. Normal
-listening is not paced.
+so offline saves never take more than about 0.5 Mbit/s of the uplink.
+
+## Why listening is paced too
+
+After every start and every seek, the browser asks for the rest of the part
+and reads it as fast as the line allows. On a small home uplink that fills
+the router's queue (and a reverse proxy's socket buffer), and the next seek,
+by this listener or any other, waits behind it: on a simulated 5 Mbit/s
+uplink with a 1 MB router queue, 2 to 4 seconds before the sound came back.
+
+So `serve.py` sends the first `PLAY_BURST` bytes (128 KB, about 16 seconds of
+a 64 kbps part) at once, and the rest at `PLAY_KBPS` (512 kbit/s, eight times
+the listening rate, four times at 2× speed). The queue stays short, and the
+same seek took 0.12 seconds. A part above 128 kbps, one with no smaller copy,
+gets four times its own bitrate instead. `PLAY_KBPS=0` turns this off.
+Saved episodes play from the device and are not affected.
 
 ## Stored state
 

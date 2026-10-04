@@ -18,6 +18,10 @@ services:
     environment:
       # 0 skips the startup scan and reuses the previous index
       REBUILD_INDEX: "1"
+      # Listening is paced after the first PLAY_BURST bytes, so a seek does
+      # not wait behind the rest of the part on a small uplink. 0 = unpaced.
+      # PLAY_KBPS: "512"
+      # PLAY_BURST: "131072"
       # Saving an episode for offline listening is paced to this many kbit/s,
       # with at most SAVE_SLOTS saves at once across all listeners.
       # SAVE_KBPS: "256"
