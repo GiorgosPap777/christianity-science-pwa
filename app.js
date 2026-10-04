@@ -159,6 +159,17 @@ function setListened(id, on) {
   update("listened", (l) => { if (on) l[id] = true; else delete l[id]; });
 }
 
+/* Where playback moves on to when an episode ends: the next one not yet
+   heard. An episode that was already marked listened is being heard again,
+   so the listener is going back through old ones on purpose, and then it is
+   simply the next one in order. Ask before the end marks it listened. */
+function upNext(ep) {
+  let nx = neighbour(ep, 1);
+  if (isListened(ep.id)) return nx;
+  while (nx && finished(nx.id)) nx = neighbour(nx, 1);
+  return nx;
+}
+
 /* New: arrived since this browser first opened the app, and not yet
    played, marked as listened or dismissed. */
 let SEEN = new Set(store.seen);
@@ -1001,9 +1012,9 @@ function onEnded() {
     loadEpisode(ep, cur.part + 1, 0, !stop);      // next part, seamless
     return;
   }
+  const nx = upNext(ep);                          // before it is marked listened
   setListened(ep.id, true);                       // all parts played through
   update("progress", (p) => { delete p[ep.id]; });
-  const nx = neighbour(ep, 1);
   if (nx) {
     /* The next episode starts by itself only with autoplay on, or inside a
        series being played through. Otherwise it is put in place, paused,
@@ -2108,7 +2119,7 @@ async function prefetchEpisode(ep, fromPart) {
   /* One part of the next episode too, so autoplay does not stall either. It
      is deliberately not recorded in cachedEps: that list holds whole episodes
      only, and a one-part lookahead must not push one of those out. */
-  const nx = neighbour(ep, 1);
+  const nx = upNext(ep);
   if (nx && (store.ui.autoplay || inQueue(nx)) && !ctl.signal.aborted) {
     try {
       if (!(await cache.match(pathOf(nx.parts[0].url)))) {
@@ -2145,7 +2156,7 @@ async function pruneAudioCache() {
      first part of the one autoplay moves on to. */
   if (cur) {
     keepEp(cur.ep);
-    const nx = neighbour(cur.ep, 1);
+    const nx = upNext(cur.ep);
     if (nx) keep.add(pathOf(nx.parts[0].url));
   }
   for (const req of keys) {

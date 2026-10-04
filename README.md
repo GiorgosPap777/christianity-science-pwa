@@ -15,7 +15,9 @@ Greek podcast **Χριστιανισμός - Επιστήμη** (Christianity - 
 - **Continuous playback** — parts play back-to-back (`1.mp3 → 2.mp3 → …`). At
   the end of an episode playback stops with the next one ready; turn on
   **autoplay** in the player to have it start by itself, across season
-  boundaries too.
+  boundaries too. Either way, "next" skips episodes you have already heard,
+  unless the one that just ended was itself a replay: then you are going back
+  through old episodes, and it carries on in order.
 - **Series** — multi-part runs ("Εσχατολογικά - Μέρος 1ο … 7ο") are found from
   the titles and listed in a **Series** view, with a button that plays the
   series through in order and stops at its end.

@@ -95,7 +95,7 @@ const I18N = {
     "season.new.one": "{n} νέα",
 
     "autoplay.label": "Αυτόματη συνέχεια",
-    "autoplay.on": "Αυτόματη συνέχεια: ενεργή. Όταν τελειώνει μια εκπομπή, ξεκινά η επόμενη.",
+    "autoplay.on": "Αυτόματη συνέχεια: ενεργή. Όταν τελειώνει μια εκπομπή, ξεκινά η επόμενη που δεν έχετε ακούσει.",
     "autoplay.off": "Αυτόματη συνέχεια: ανενεργή. Η αναπαραγωγή σταματά στο τέλος κάθε εκπομπής.",
 
     "share.title": "Κοινοποίηση συνδέσμου σε αυτό το σημείο",
@@ -233,7 +233,7 @@ const I18N = {
     "season.new": "{n} new",
 
     "autoplay.label": "Autoplay",
-    "autoplay.on": "Autoplay: on. When an episode ends, the next one starts.",
+    "autoplay.on": "Autoplay: on. When an episode ends, the next one you haven't heard starts.",
     "autoplay.off": "Autoplay: off. Playback stops at the end of each episode.",
 
     "share.title": "Share a link to this point",
