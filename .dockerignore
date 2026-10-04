@@ -14,6 +14,4 @@ Dockerfile
 compose.yaml
 DOCKERHUB.md
 
-# the old app artwork; make_icons.py no longer uses it
-icon-source.jpg
 .index.*.tmp
