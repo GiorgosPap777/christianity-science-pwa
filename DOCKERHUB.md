@@ -105,8 +105,8 @@ Once, by hand: `docker compose run --rm fetcher fetch --dry-run`.
 
 ## Smaller copies
 
-The newest seasons are 112–192 kbps, two to three times the size of the
-64 kbps older ones for the same speech. The `lite` command writes a 64 kbps
+About a quarter of the parts, most of seasons 16–19 and some older ones, are
+112–192 kbps, two to three times the size of the rest for the same speech. The `lite` command writes a 64 kbps
 mono copy of every part above 80 kbps to `/data/lite` (the archive is only
 read), and the index then points at the copies, so a listener needs a
 third to a half of the bandwidth. Run it once for the whole archive (about

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Make smaller copies of the archive's high-bitrate parts, for streaming.
 
-The newest seasons are 112-192 kbps mono speech, two to three times the size
-of the 64 kbps parts of seasons 1-15, which sound fine for this content. On a
+Most of the archive is 64 kbps mono, which sounds fine for speech, but about
+a quarter of the parts (most of seasons 16-19, some older ones) are 112-192
+kbps, two to three times the size. On a
 home uplink shared by every listener, that size is what limits how many can
 listen at once. This writes a 64 kbps mono copy of every part above that rate
 into a separate folder, mirroring the archive's layout:

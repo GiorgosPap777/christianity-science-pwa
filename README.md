@@ -53,8 +53,7 @@ Greek podcast **Χριστιανισμός - Επιστήμη** (Christianity - 
 - **Save for offline** — the cloud chip in the player saves the episode to the
   device, to play on a plane or in a dead spot. Nothing is downloaded unless
   you ask. Saved episodes carry a cloud mark in the list.
-- **Smaller copies** (optional) — 64 kbps copies of the newest seasons'
-  high-bitrate parts, for streaming over a home uplink; see
+- **Smaller copies** (optional) — 64 kbps copies of the high-bitrate parts, for streaming over a home uplink; see
   [Smaller copies](#smaller-copies).
 - Scrubbing, ±15 s, part/episode skip, playback speed, OS media keys, and a
   mobile-friendly layout.
@@ -137,9 +136,10 @@ Once, by hand: `docker compose run --rm fetcher fetch --dry-run`.
 
 ## Smaller copies
 
-Seasons 1–15 are 64 kbps mono, but the newest seasons are 112–192 kbps, two
-to three times the size for the same speech. On a home uplink shared by every
-listener, that size decides how many can listen at once. `make_lite.py`
+Most of the archive is 64 kbps mono, but about a quarter of the parts, most of
+seasons 16–19 and some older ones, are 112–192 kbps: two to three times the
+size for the same speech. On a home uplink shared by every listener, that size
+decides how many can listen at once. `make_lite.py`
 writes a 64 kbps mono copy of every part above 80 kbps into a separate folder
 that mirrors the archive's layout. The archive itself is only read.
 
