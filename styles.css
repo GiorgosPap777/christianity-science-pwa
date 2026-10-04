@@ -6,12 +6,13 @@
   --panel-2: #f0f0ee;
   --text: #1b1b19;
   --muted: #6b6b66;
-  --faint: #97978f;
+  --faint: #6f6f69;
   --line: #e2e2dd;
   --accent: #7c4a2d;
   --accent-soft: #f0e4dc;
   --accent-text: #fff;
   --ok: #2f6b46;
+  --ok-text: #fff;        /* on --ok */
   --shadow: 0 1px 2px rgba(0,0,0,.05), 0 8px 24px rgba(0,0,0,.06);
   --radius: 10px;
   --player-h: 148px;
@@ -28,12 +29,13 @@
     --panel-2: #26262c;
     --text: #ececea;
     --muted: #a2a2a0;
-    --faint: #77777a;
+    --faint: #909093;
     --line: #303038;
     --accent: #d99a6c;
     --accent-soft: #38291f;
     --accent-text: #1b1b19;
     --ok: #6cc08b;
+    --ok-text: #1b1b19;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
     --np-top: #15304b;
     color-scheme: dark;
@@ -45,12 +47,13 @@
   --panel-2: #26262c;
   --text: #ececea;
   --muted: #a2a2a0;
-  --faint: #77777a;
+  --faint: #909093;
   --line: #303038;
   --accent: #d99a6c;
   --accent-soft: #38291f;
   --accent-text: #1b1b19;
   --ok: #6cc08b;
+  --ok-text: #1b1b19;
   --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
   --np-top: #15304b;
   color-scheme: dark;
@@ -228,7 +231,7 @@ main { max-width: 62rem; margin: 0 auto; padding: 1rem clamp(.75rem, 3vw, 1.75re
 .season-bar > i { display: block; height: 100%; background: var(--ok); opacity: .75; }
 .season-head:hover { background: var(--panel-2); }
 .caret { width: 14px; height: 14px; fill: var(--faint); flex: none; transition: transform .15s; }
-.season[data-open="true"] .caret { transform: rotate(90deg); }
+.season[data-open="true"] .season-head .caret { transform: rotate(90deg); }
 .season-name { font-weight: 620; flex: 1 1 auto; min-width: 0; }
 .season-years { color: var(--faint); font-size: .78rem; font-variant-numeric: tabular-nums; }
 .season-meta { color: var(--muted); font-size: .76rem; flex: none; }
@@ -238,14 +241,6 @@ main { max-width: 62rem; margin: 0 auto; padding: 1rem clamp(.75rem, 3vw, 1.75re
 }
 .season-body { border-top: 1px solid var(--line); }
 
-/* ---------- series ---------- */
-.series-actions {
-  display: flex; align-items: center; gap: .8rem; flex-wrap: wrap;
-  padding: .6rem .75rem; background: var(--panel-2);
-}
-.series-actions .btn-primary { padding: .42rem 1rem; font-size: .82rem; }
-.series-note { color: var(--muted); font-size: .78rem; }
-.season-body > .series-actions + .ep { border-top: 0; }
 .season[data-open="false"] .season-body { display: none; }
 
 /* ---------- episode rows ---------- */
@@ -256,11 +251,12 @@ main { max-width: 62rem; margin: 0 auto; padding: 1rem clamp(.75rem, 3vw, 1.75re
 }
 .season-body > .ep:first-child { border-top: 0; }
 .ep:hover { background: var(--panel-2); }
-.ep.listened .ep-title, .ep.listened .ep-date { opacity: .5; }
+/* Only the title fades: the date line is small and already secondary. */
+.ep.listened .ep-title { opacity: .65; }
 .ep.playing { background: var(--accent-soft); }
 .ep.playing .ep-title { color: var(--accent); font-weight: 620; }
 /* Being re-heard: the current row should not be the faintest on screen. */
-.ep.playing.listened .ep-title, .ep.playing.listened .ep-date { opacity: 1; }
+.ep.playing.listened .ep-title { opacity: 1; }
 /* The row a shared link points to, picked out for a moment. */
 .ep.flash { animation: flash 2.4s ease-out; }
 @keyframes flash { 0%, 40% { background: var(--accent-soft); } }
@@ -275,7 +271,7 @@ main { max-width: 62rem; margin: 0 auto; padding: 1rem clamp(.75rem, 3vw, 1.75re
 .ep.playing .ep-play { background: var(--accent); border-color: var(--accent); }
 .ep.playing .ep-play svg { fill: var(--accent-text); }
 
-.ep-main { flex: 1 1 auto; min-width: 0; }
+.ep-main { flex: 1 1 auto; min-width: 0; cursor: pointer; }
 .ep-title {
   display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
@@ -308,7 +304,25 @@ main { max-width: 62rem; margin: 0 auto; padding: 1rem clamp(.75rem, 3vw, 1.75re
 .ep-check svg { width: 14px; height: 14px; fill: none; stroke: var(--faint); stroke-width: 2.6; }
 .ep-check:hover { border-color: var(--ok); }
 .ep.listened .ep-check { background: var(--ok); border-color: var(--ok); }
-.ep.listened .ep-check svg { stroke: #fff; }
+.ep.listened .ep-check svg { stroke: var(--ok-text); }
+
+/* ---------- series rows ----------
+   The parts of a series in a season, as one row that opens to list them. */
+.ep-series { border-top: 1px solid var(--line); }
+.season-body > .ep-series:first-child { border-top: 0; }
+.ep-series > .series-head { border-top: 0; }
+.series-toggle {
+  display: flex; align-items: center; gap: .5rem;
+  background: none; border: 0; padding: 0; margin: 0;
+  color: inherit; font: inherit; text-align: left;
+}
+.series-text { flex: 1 1 auto; min-width: 0; }
+.series-text .ep-sub { display: flex; }
+.series-tag { color: var(--accent); font-weight: 600; }
+.ep-series[data-open="true"] .series-toggle .caret { transform: rotate(90deg); }
+.series-body > .ep { padding-left: 2.25rem; }
+.ep.series-head.playing { background: none; }
+.ep.series-head.playing .ep-title { color: var(--accent); font-weight: 620; }
 
 mark { background: var(--accent-soft); color: inherit; border-radius: 3px; padding: 0 .1em; }
 
@@ -452,7 +466,7 @@ input[type="range"]:disabled::-webkit-slider-thumb { background: var(--faint); }
 .autoplay-chip .chip-icon, .share-chip .chip-icon { width: 16px; height: 16px; }
 
 /* Same green as a listened episode row, not the accent "pressed" fill. */
-.chip.listen-chip[aria-pressed="true"] { background: var(--ok); border-color: var(--ok); color: #fff; }
+.chip.listen-chip[aria-pressed="true"] { background: var(--ok); border-color: var(--ok); color: var(--ok-text); }
 #speed {
   background: var(--panel); border: 1px solid var(--line);
   border-radius: 999px; padding: 0 1.15rem; height: 30px; font-size: .76rem;
@@ -515,6 +529,14 @@ input[type="range"].volume { width: 5rem; flex: none; }
   }
   .toolbar-btns::-webkit-scrollbar { display: none; }
   .toolbar-btns .chip { flex: 1 0 auto; text-align: center; }
+  /* Greek titles run to 80-100 characters; one line would show a third. */
+  .ep-title {
+    white-space: normal; display: -webkit-box;
+    -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .series-body > .ep { padding-left: 1.5rem; }
+  .series-text .ep-sub .ep-date { flex-basis: 100%; }
+  .series-text .ep-sub .dot:has(+ .ep-date) { display: none; }
   .listen-chip #listened-label { display: none; }
   .listen-chip { padding-inline: .6rem; }
   #btn-prev-ep, #btn-next-ep { display: none; }
@@ -704,23 +726,22 @@ body.searching #recent-section { display: none; }
 }
 
 /* ---------- offline cache chip ---------- */
-/* This chip is both a toggle and a status readout, so it opts out of the
-   filled aria-pressed treatment and colours by state instead. */
-.offline-chip,
-.offline-chip[aria-pressed="true"] {
+/* Saves the current episode when tapped, and shows how that is going, so it
+   is coloured by state: saving, saved, failed. */
+.offline-chip {
   display: inline-flex; align-items: center; gap: .34rem;
   background: var(--panel); border-color: var(--line); color: var(--muted);
 }
 .offline-chip #offline-label:empty { display: none; }
 .offline-chip .off-icon { width: 14px; height: 14px; fill: currentColor; flex: none; }
-.offline-chip[aria-pressed="false"] { opacity: .55; }
-.offline-chip[aria-pressed="true"][data-state="ready"] {
+.offline-chip[data-state="ready"] {
   color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, var(--line));
 }
-.offline-chip[aria-pressed="true"][data-state="saving"] {
+.offline-chip[data-state="saving"],
+.offline-chip[data-state="queued"] {
   color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
 }
-.offline-chip[aria-pressed="true"][data-state="error"] {
+.offline-chip[data-state="error"] {
   color: #b3402f; border-color: #b3402f;
 }
 

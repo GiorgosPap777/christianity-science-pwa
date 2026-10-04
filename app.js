@@ -60,12 +60,10 @@ const CLEAN = {
     return {
       sort: u.sort === "oldest" ? "oldest" : "newest",
       unheardOnly: u.unheardOnly === true,
-      view: u.view === "series" ? "series" : "seasons",
       open: Array.isArray(u.open) ? u.open.filter(Number.isInteger) : [],  // season numbers
-      openSeries: strings(u.openSeries),                                    // series ids
+      openSeries: strings(u.openSeries),                 // series rows opened in the list
       volume: isNum(u.volume) ? Math.max(0, Math.min(1, u.volume)) : 1,
       speed: SPEEDS.indexOf(u.speed) !== -1 ? u.speed : 1,
-      offlineCache: u.offlineCache !== false,
       autoplay: u.autoplay === true,   // off unless the listener turns it on
     };
   },
@@ -121,7 +119,8 @@ function fmtTime(sec) {
 /* --------------------------------------------------------------- app data */
 
 let DATA = null;
-let SEASONS = [];          // chronological, season 1 .. N
+let SEASONS = [];          // chronological, oldest season first
+const SEASON_BY_NUM = Object.create(null);   // season number -> season
 let FLAT = [];             // every episode, chronological across the archive
 const BY_ID = Object.create(null);
 
@@ -147,7 +146,7 @@ function epTotal(ep) {
 }
 function elapsedBefore(ep, partIdx) {
   let sum = 0;
-  for (let i = 0; i < partIdx; i++) sum += ep.parts[i].dur || 0;
+  for (let i = 0; i < Math.min(partIdx, ep.parts.length); i++) sum += ep.parts[i].dur || 0;
   return sum;
 }
 
@@ -160,12 +159,13 @@ function setListened(id, on) {
 }
 
 /* Where playback moves on to when an episode ends: the next one not yet
-   heard. An episode that was already marked listened is being heard again,
-   so the listener is going back through old ones on purpose, and then it is
-   simply the next one in order. Ask before the end marks it listened. */
+   heard. An episode that was already marked listened when it was put on is
+   being heard again, so the listener is going back through old ones on
+   purpose, and then it is simply the next one in order. Marking it listened
+   near the end does not make it a replay (`replaying`, set in loadEpisode). */
 function upNext(ep) {
   let nx = neighbour(ep, 1);
-  if (isListened(ep.id)) return nx;
+  if (cur && cur.ep === ep ? replaying : isListened(ep.id)) return nx;
   while (nx && finished(nx.id)) nx = neighbour(nx, 1);
   return nx;
 }
@@ -188,6 +188,12 @@ function resumeAt(ep) {
 
 function seasonLabel(s) {
   return store.lang === "el" ? s.dir : t("season.label", { n: s.num });
+}
+/* By number: an archive may start at a later season or skip one, so the
+   seasons are not always 1..N in order. */
+function epSeasonLabel(ep) {
+  const s = SEASON_BY_NUM[ep.season];
+  return s ? seasonLabel(s) : t("season.label", { n: ep.season });
 }
 function epDate(ep) {
   return store.lang === "el" ? ep.dateLabel : (ep.dateLabelEn || ep.dateLabel);
@@ -286,8 +292,6 @@ function applyI18n() {
     el.setAttribute("aria-label", t(el.dataset.i18nAriaLabel));
   });
 
-  const fu = $("#filter-unheard");
-  if (fu) fu.textContent = t(store.ui.unheardOnly ? "filter.unheardOn" : "filter.unheard");
 
   $$(".lang-btn").forEach((b) => {
     b.setAttribute("aria-pressed", String(b.dataset.lang === store.lang));
@@ -444,17 +448,22 @@ function episodeRow(ep) {
   play.type = "button";
   play.className = "ep-play";
   setRowButton(play, ep);
-  play.addEventListener("click", () => {
+  const start = () => {
     if (cur && cur.ep === ep) { togglePlay(); return; }
     const p = resumeAt(ep);
     loadEpisode(ep, p.part, p.time, true);
-  });
+  };
+  play.addEventListener("click", start);
 
+  /* Most of the row is the title: tapping it plays, as in any podcast app.
+     The play button stays the control for keyboards and screen readers. */
   const main = document.createElement("div");
   main.className = "ep-main";
+  main.addEventListener("click", start);
 
   const title = document.createElement("span");
   title.className = "ep-title";
+  title.title = ep.title;
   if (isNew(ep.id)) {
     const badge = document.createElement("span");
     badge.className = "new-badge";
@@ -541,35 +550,165 @@ function episodeRow(ep) {
 function focusedInList() {
   const el = document.activeElement;
   if (!el || !$("#seasons").contains(el)) return null;
-  const row = el.closest(".ep");
+  const row = el.closest(".ep[data-id]");
+  const box = !row && el.closest(".ep-series");
   const sec = el.closest(".season");
-  const cls = ["ep-play", "ep-check", "series-play"].filter((c) => el.classList.contains(c))[0];
-  return { id: row && row.dataset.id, cls: cls, group: sec && sec.dataset.key };
+  const cls = ["ep-play", "ep-check", "series-toggle"].filter((c) => el.classList.contains(c))[0];
+  return { id: row && row.dataset.id, series: box && box.dataset.series, cls: cls,
+           group: sec && sec.dataset.key };
 }
 function refocus(f) {
   if (!f) return;
   const sec = f.group && document.querySelector('.season[data-key="' + cssEscape(f.group) + '"]');
   const row = f.id && f.cls && sec &&
     sec.querySelector('.ep[data-id="' + cssEscape(f.id) + '"]');
+  const head = f.series && f.cls && sec &&
+    sec.querySelector('.ep-series[data-series="' + cssEscape(f.series) + '"] > .series-head');
   const el = (row && row.querySelector("." + f.cls)) ||
-    (sec && !f.id && f.cls && sec.querySelector("." + f.cls)) ||
+    (head && head.querySelector("." + f.cls)) ||
     (sec && sec.querySelector(".season-head"));
   if (el) el.focus({ preventScroll: true });
 }
 
-/* What the list is made of: seasons, or series of episodes. Each group
-   keeps its own open/closed state in the matching ui list. */
+/* The seasons, each keeping its open/closed state in store.ui.open. */
 function listGroups() {
-  if (store.ui.view === "series") {
-    return SERIES.map((s) => ({
-      key: "r:" + s.id, id: s.id, openList: store.ui.openSeries, series: s,
-      label: s.name, yearStart: s.yearStart, yearEnd: s.yearEnd, episodes: s.eps,
-    }));
-  }
   return SEASONS.map((s) => ({
     key: "s:" + s.num, id: s.num, openList: store.ui.open,
     label: seasonLabel(s), yearStart: s.yearStart, yearEnd: s.yearEnd, episodes: s.episodes,
   }));
+}
+
+/* A season's episodes in display order. Outside a search, two or more parts
+   of one series become a single series row, where the first of them would
+   be; one part on its own stays an ordinary row. */
+function appendRows(host, eps, flat) {
+  const shown = Object.create(null);         // series id -> its episodes here
+  if (!flat) {
+    for (const ep of eps) {
+      const sr = SERIES_OF[ep.id];
+      if (sr) (shown[sr.id] = shown[sr.id] || []).push(ep);
+    }
+  }
+  const done = Object.create(null);
+  for (const ep of eps) {
+    const sr = SERIES_OF[ep.id];
+    const here = sr && shown[sr.id];
+    if (here && here.length > 1) {
+      if (!done[sr.id]) {
+        done[sr.id] = true;
+        host.appendChild(seriesRow(sr, sr.eps.filter((e) => here.indexOf(e) !== -1)));
+      }
+      continue;
+    }
+    host.appendChild(episodeRow(ep));
+  }
+}
+
+/* "19 Μαρτίου – 2 Απριλίου 2026": the year once when both share it. */
+function dateRange(eps) {
+  const a = epDate(eps[0]), b = epDate(eps[eps.length - 1]);
+  if (a === b) return a;
+  return (a.slice(-4) === b.slice(-4) ? a.slice(0, -5) : a) + " – " + b;
+}
+
+/* The series row's button plays the series through in order, from the
+   first part not yet heard (playSeries); while one of its parts is playing
+   it pauses, like an episode's. */
+function setSeriesButton(btn, series) {
+  const mine = !!(cur && series.eps.indexOf(cur.ep) !== -1);
+  const playing = mine && isPlaying();
+  btn.toggleAttribute("data-loading", playing && loading);
+  btn.innerHTML = playing ? SVG_PAUSE : SVG_PLAY;
+  const done = series.eps.every((e) => finished(e.id));
+  const fresh = series.eps.every((e) => !isListened(e.id) && !store.progress[e.id]);
+  const lbl = t(playing ? "player.pause"
+    : done ? "series.again" : fresh ? "series.play" : "series.continue");
+  btn.title = lbl;
+  btn.setAttribute("aria-label", lbl + ": " + series.name);
+}
+
+/* One row for the parts of a series in a season. Opening it lists them,
+   Μέρος 1ο first, whatever the list's sort order: the order to hear them in. */
+function seriesRow(series, eps) {
+  const open = store.ui.openSeries.indexOf(series.id) !== -1;
+  const box = document.createElement("div");
+  box.className = "ep-series";
+  box.dataset.series = series.id;
+  box.dataset.open = String(open);
+
+  const head = document.createElement("div");
+  head.className = "ep series-head";
+  const heard = eps.filter((e) => isListened(e.id)).length;
+  if (heard === eps.length) head.classList.add("listened");
+  if (cur && eps.indexOf(cur.ep) !== -1) head.classList.add("playing");
+
+  const play = document.createElement("button");
+  play.type = "button";
+  play.className = "ep-play series-play";
+  setSeriesButton(play, series);
+  play.addEventListener("click", () => {
+    if (cur && series.eps.indexOf(cur.ep) !== -1) {
+      if (isPlaying()) { audio.pause(); return; }
+      queue = series;                              // carry on through the series
+      play();
+      return;
+    }
+    playSeries(series);
+  });
+
+  const main = document.createElement("button");
+  main.type = "button";
+  main.className = "ep-main series-toggle";
+  main.setAttribute("aria-expanded", String(open));
+  const text = document.createElement("span");
+  text.className = "series-text";
+  const title = document.createElement("span");
+  title.className = "ep-title";
+  title.title = series.name;
+  if (eps.some((e) => isNew(e.id))) {
+    const badge = document.createElement("span");
+    badge.className = "new-badge";
+    badge.textContent = t("new.badge");
+    title.appendChild(badge);
+  }
+  title.appendChild(document.createTextNode(series.name));
+  text.appendChild(title);
+
+  const sub = document.createElement("span");
+  sub.className = "ep-sub";
+  // The dates go last: on phones they take a line of their own.
+  const bits = [t("series.label"), t("series.count", { n: eps.length })];
+  if (heard > 0 && heard < eps.length) bits.push(t("series.heard", { n: heard, total: eps.length }));
+  bits.push(dateRange(eps));
+  bits.forEach((b, i) => {
+    if (i) sub.insertAdjacentHTML("beforeend", '<span class="dot">·</span>');
+    const sp = document.createElement("span");
+    if (i === 0) sp.className = "series-tag";
+    else if (i === bits.length - 1) sp.className = "ep-date";
+    sp.textContent = b;
+    sub.appendChild(sp);
+  });
+  text.appendChild(sub);
+  main.appendChild(text);
+  main.insertAdjacentHTML("beforeend", SVG_CARET);
+  main.addEventListener("click", () => {
+    const i = store.ui.openSeries.indexOf(series.id);
+    if (i === -1) store.ui.openSeries.push(series.id); else store.ui.openSeries.splice(i, 1);
+    saveUI();
+    renderSeasons();
+  });
+
+  head.appendChild(play);
+  head.appendChild(main);
+  box.appendChild(head);
+
+  if (open) {
+    const body = document.createElement("div");
+    body.className = "series-body";
+    for (const ep of eps) body.appendChild(episodeRow(ep));
+    box.appendChild(body);
+  }
+  return box;
 }
 
 function renderSeasons() {
@@ -578,11 +717,9 @@ function renderSeasons() {
   host.textContent = "";
   const searching = !!view.query;
   document.body.classList.toggle("searching", searching);
-  const seriesView = store.ui.view === "series";
   let shown = 0;
 
-  // Groups follow the same newest/oldest toggle as the episodes inside them;
-  // a series still lists its parts in order, 1 to N.
+  // Seasons follow the same newest/oldest toggle as the episodes inside them.
   const all = listGroups();
   const groups = store.ui.sort === "newest" ? all.reverse() : all;
 
@@ -594,7 +731,7 @@ function renderSeasons() {
     const open = searching ? true : g.openList.indexOf(g.id) !== -1;
 
     const sec = document.createElement("section");
-    sec.className = "season" + (g.series ? " series" : "");
+    sec.className = "season";
     sec.dataset.open = String(open);
     sec.dataset.key = g.key;
 
@@ -642,6 +779,15 @@ function renderSeasons() {
     }
     head.appendChild(meta);
 
+    /* Read out as one phrase, not "Εκπομπών 20262 εκπομπές": the parts sit
+       side by side on screen with nothing between them. */
+    head.setAttribute("aria-label", [g.label,
+      g.yearStart && (g.yearStart === g.yearEnd ? g.yearStart : g.yearStart + "–" + g.yearEnd),
+      fresh > 0 && t("season.new", { n: fresh }),
+      unheard === 0 ? t("season.allListened") : t("season.episodes", { n: g.episodes.length }),
+      unheard > 0 && fresh < unheard && t("season.unheard", { n: unheard }),
+    ].filter(Boolean).join(", "));
+
     const heard = g.episodes.length - unheard;
     if (heard > 0) {
       const bar = document.createElement("span");
@@ -670,9 +816,7 @@ function renderSeasons() {
     if (open) {
       const body = document.createElement("div");
       body.className = "season-body";
-      if (g.series) body.appendChild(seriesActions(g.series));
-      const ordered = store.ui.sort === "newest" && !seriesView ? eps.slice().reverse() : eps;
-      for (const ep of ordered) body.appendChild(episodeRow(ep));
+      appendRows(body, store.ui.sort === "newest" ? eps.slice().reverse() : eps, searching);
       sec.appendChild(body);
     }
     host.appendChild(sec);
@@ -712,7 +856,7 @@ function renderContinue() {
   ttl.textContent = ep.title;
   const sub = document.createElement("div");
   sub.className = "continue-sub";
-  sub.textContent = seasonLabel(SEASONS[ep.season - 1]) + " · " +
+  sub.textContent = epSeasonLabel(ep) + " · " +
     t("continue.at", {
       part: last.part + 1, total: ep.parts.length, time: fmtTime(last.time || 0),
     });
@@ -803,35 +947,6 @@ function renderNew() {
   }
 }
 
-/* The bar at the top of an open series: play it through from the first
-   episode not yet finished. */
-function seriesActions(series) {
-  const bar = document.createElement("div");
-  bar.className = "series-actions";
-  const next = seriesStart(series);
-  const k = series.eps.indexOf(next);
-  const fresh = series.eps.every((e) => !isListened(e.id) && !store.progress[e.id]);
-  const done = series.eps.every((e) => finished(e.id));
-
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "btn-primary series-play";
-  btn.innerHTML = SVG_PLAY;
-  btn.appendChild(document.createTextNode(
-    t(done ? "series.again" : fresh ? "series.play" : "series.continue")));
-  btn.title = t("series.hint");
-  btn.addEventListener("click", () => playSeries(series));
-  bar.appendChild(btn);
-
-  if (!fresh && !done) {
-    const note = document.createElement("span");
-    note.className = "series-note";
-    note.textContent = t("series.at", { n: k + 1, total: series.eps.length });
-    bar.appendChild(note);
-  }
-  return bar;
-}
-
 /* Where a series picks up: the first episode not finished, else (all heard)
    the first one again. */
 function seriesStart(series) {
@@ -866,6 +981,8 @@ let lastSave = 0;
 let lastGood = 0;          // position in the part that last played without error
 let retryOnline = false;   // a part failed while playing; retry when back online
 let loading = false;       // playing, but waiting for data
+let replaying = false;     // the current episode was already heard when put on
+let notedPlaying = null;   // the episode last counted as played (see "playing")
 
 /* Whether this tab has a position of its own to save. A tab that only put
    the last episode back on screen at startup has nothing new, and saving
@@ -885,6 +1002,10 @@ function takeOver() { dirty = true; handedOff = false; }
 function loadEpisode(ep, part, time, autoplay, quiet) {
   if (!ep) return;
   if (!inQueue(ep)) queue = null;                  // left the series
+  if (!cur || cur.ep !== ep) {
+    replaying = isListened(ep.id);
+    notedPlaying = null;
+  }
   part = Math.max(0, Math.min(part | 0, ep.parts.length - 1));
   cur = { ep: ep, part: part };
   pendingSeek = time || 0;
@@ -904,15 +1025,7 @@ function loadEpisode(ep, part, time, autoplay, quiet) {
   dirty = !quiet;
   if (!quiet) persistPosition(true);   // "recent" waits until it actually plays
 
-  /* Saving for offline starts once the episode actually plays (see the play
-     event), not when it is merely loaded: putting last session's episode
-     back on screen must not download 50 MB nobody asked for. Moving to
-     another episode stops saving the previous one. */
-  if (prefetchedFor !== ep.id) {
-    if (prefetchCtl) prefetchCtl.abort();
-    prefetchedFor = null;
-    setOffline(store.cachedEps.indexOf(ep.id) !== -1 ? "ready" : "idle");
-  }
+  renderOfflineChip();
 
   if (autoplay) {
     const p = audio.play();
@@ -949,6 +1062,8 @@ function play() {
   /* An episode that ended where it is (see onEnded) plays again from its
      first part, not from the start of its last one. */
   if (audio.ended && cur.part === cur.ep.parts.length - 1) {
+    replaying = true;
+    notedPlaying = null;
     loadEpisode(cur.ep, 0, 0, true);
     return;
   }
@@ -1022,15 +1137,16 @@ function onEnded() {
   setListened(ep.id, true);                       // all parts played through
   update("progress", (p) => { delete p[ep.id]; });
   /* Only autoplay, or a series being played through, moves on to the next
-     episode. A sleep timer set to "end of episode" still moves on, paused. */
-  if (nx && (store.ui.autoplay || inQueue(nx))) {
+     episode; a series stops at its own end, with autoplay on or off. A
+     sleep timer set to "end of episode" still moves on, paused. */
+  if (nx && (inQueue(ep) ? inQueue(nx) : store.ui.autoplay)) {
     const p = resumeAt(nx);                        // it may have been started before
     loadEpisode(nx, p.part, p.time, !stop);
     return;
   }
-  /* Autoplay is off, or this was the newest episode: playback stops on this
-     one. There is nothing to continue, so the Continue card goes and the
-     next start does not bring this one back. */
+  /* Autoplay is off, the series is over, or this was the newest episode:
+     playback stops on this one. There is nothing to continue, so the
+     Continue card goes and the next start does not bring this one back. */
   store.last = null;
   saveLast();
   dirty = false;
@@ -1141,7 +1257,7 @@ function updatePlayerText() {
   /* Spans, so the full-screen view can drop the part number, which its parts
      bar already shows. The " · " separators come from styles.css. */
   sub.textContent = "";
-  [["season", seasonLabel(SEASONS[ep.season - 1])],
+  [["season", epSeasonLabel(ep)],
    ["part", t("ep.part", { n: cur.part + 1, total: ep.parts.length })],
    ["date", epDate(ep)]].forEach((x) => {
     const span = document.createElement("span");
@@ -1253,7 +1369,7 @@ function updateMediaSession() {
     navigator.mediaSession.metadata = new window.MediaMetadata({
       title: cur.ep.title,
       artist: t("ep.part", { n: cur.part + 1, total: cur.ep.parts.length }),
-      album: seasonLabel(SEASONS[cur.ep.season - 1]),
+      album: epSeasonLabel(cur.ep),
       artwork: ARTWORK,
     });
   } catch (e) {}
@@ -1315,8 +1431,6 @@ function wire() {
   $("#filter-unheard").addEventListener("click", (e) => {
     store.ui.unheardOnly = !store.ui.unheardOnly;
     e.currentTarget.setAttribute("aria-pressed", String(store.ui.unheardOnly));
-    e.currentTarget.textContent =
-      t(store.ui.unheardOnly ? "filter.unheardOn" : "filter.unheard");
     saveUI();
     render();
   });
@@ -1328,19 +1442,10 @@ function wire() {
     renderSeasons();
   });
   $("#expand-toggle").addEventListener("click", () => {
-    const open = allGroupsOpen() ? [] : listGroups().map((g) => g.id);
-    if (store.ui.view === "series") store.ui.openSeries = open;
-    else store.ui.open = open;
+    store.ui.open = allGroupsOpen() ? [] : listGroups().map((g) => g.id);
     saveUI();
     updateExpandLabel();
     render();
-  });
-  $("#view-series").addEventListener("click", (e) => {
-    store.ui.view = store.ui.view === "series" ? "seasons" : "series";
-    e.currentTarget.setAttribute("aria-pressed", String(store.ui.view === "series"));
-    saveUI();
-    updateExpandLabel();
-    renderSeasons();
   });
   $("#btn-new-dismiss").addEventListener("click", () => {
     markSeen(FLAT.filter((ep) => isNew(ep.id)).map((ep) => ep.id));
@@ -1385,22 +1490,9 @@ function wire() {
   /* a shared link opened while the app is already open */
   window.addEventListener("hashchange", () => { if (DATA) openFromHash(); });
 
-  /* offline caching */
+  /* saving for offline: only when asked */
   const off = $("#btn-offline");
-  if (off) off.addEventListener("click", () => {
-    store.ui.offlineCache = !store.ui.offlineCache;
-    saveUI();
-    if (store.ui.offlineCache) {
-      prefetchedFor = null;
-      schedulePrefetch();
-    } else {
-      if (prefetchCtl) prefetchCtl.abort();
-      prefetchedFor = null;
-      setOffline("idle");
-      clearAudioCache().catch(() => {});
-    }
-    renderOfflineChip();
-  });
+  if (off) off.addEventListener("click", () => { offlineAction().catch(() => {}); });
 
   /* connection state */
   window.addEventListener("online", () => {
@@ -1469,12 +1561,6 @@ function wire() {
   });
   audio.addEventListener("play", () => {
     takeOver();
-    noteRecent(cur.ep.id);        // a restored episode only counts once played
-    if (isNew(cur.ep.id)) {       // ...and stops being new
-      markSeen([cur.ep.id]);
-      render();
-    }
-    schedulePrefetch();
     updatePlayerText(); markPlayingRow(); updatePositionState();
   });
   audio.addEventListener("pause", () => {
@@ -1488,6 +1574,17 @@ function wire() {
   audio.addEventListener("stalled", buffering);
   ["playing", "ended", "emptied"].forEach((ev) =>
     audio.addEventListener(ev, () => setLoading(false)));
+  /* An episode counts as played -- into Recent, no longer new -- once sound
+     actually comes out, not on a Play that then fails to load. */
+  audio.addEventListener("playing", () => {
+    if (!cur || notedPlaying === cur.ep.id) return;
+    notedPlaying = cur.ep.id;
+    noteRecent(cur.ep.id);
+    if (isNew(cur.ep.id)) {
+      markSeen([cur.ep.id]);
+      render();
+    }
+  });
   audio.addEventListener("seeked", updatePositionState);
   audio.addEventListener("ratechange", updatePositionState);
   audio.addEventListener("ended", onEnded);
@@ -1628,9 +1725,15 @@ function syncPlayerHeight() {
 }
 
 function markPlayingRow() {
-  $$(".ep.playing").forEach((r) => {
+  $$(".ep.playing[data-id]").forEach((r) => {
     r.classList.remove("playing");
     setRowButton(r.querySelector(".ep-play"), BY_ID[r.dataset.id]);
+  });
+  $$(".ep-series").forEach((box) => {
+    const series = SERIES_BY_ID[box.dataset.series];
+    const head = box.querySelector(".series-head");
+    head.classList.toggle("playing", !!(cur && series.eps.indexOf(cur.ep) !== -1));
+    setSeriesButton(head.querySelector(".series-play"), series);
   });
   if (!cur) return;
   const row = document.querySelector('.ep[data-id="' + cssEscape(cur.ep.id) + '"]');
@@ -1765,7 +1868,10 @@ function openFromHash() {
   const ep = id ? BY_ID[id] : BY_DATE[date];
   if (!ep) { showToast(t("share.notFound")); return false; }
 
-  const at = Math.max(0, parseInt(h.get("t"), 10) || 0);
+  let at = Math.max(0, parseInt(h.get("t"), 10) || 0);
+  /* At (or past) the very end, Play would only finish the episode at once
+     and mark it heard: open it at the start instead. */
+  if (epTotal(ep) && at >= epTotal(ep) - 5) at = 0;
   const pos = positionAt(ep, at);
   queue = null;
   loadEpisode(ep, pos.part, pos.time, false, true);
@@ -1785,18 +1891,10 @@ function revealEpisode(ep) {
   if (store.ui.unheardOnly && isListened(ep.id)) {
     store.ui.unheardOnly = false;
     $("#filter-unheard").setAttribute("aria-pressed", "false");
-    $("#filter-unheard").textContent = t("filter.unheard");
   }
   const series = SERIES_OF[ep.id];
-  if (store.ui.view === "series" && !series) {
-    store.ui.view = "seasons";
-    $("#view-series").setAttribute("aria-pressed", "false");
-  }
-  if (store.ui.view === "series") {
-    if (store.ui.openSeries.indexOf(series.id) === -1) store.ui.openSeries.push(series.id);
-  } else if (store.ui.open.indexOf(ep.season) === -1) {
-    store.ui.open.push(ep.season);
-  }
+  if (series && store.ui.openSeries.indexOf(series.id) === -1) store.ui.openSeries.push(series.id);
+  if (store.ui.open.indexOf(ep.season) === -1) store.ui.open.push(ep.season);
   saveUI();
   updateExpandLabel();
   render();
@@ -1945,23 +2043,27 @@ function wireNowPlaying() {
 
 /* ============================================================ offline cache
 
-   Keeps the episode you are listening to on the device, so playback survives a
-   tunnel or a dead spot. The service worker serves these back with byte-range
-   support; see sw.js. */
+   Saves an episode on the device when the listener asks for it (the cloud
+   button in the player), so it plays in a tunnel or with no signal. Nothing
+   is saved by itself: a new episode is 40-120 MB of someone's mobile data,
+   and of the server's small home uplink, which every listener shares.
+
+   The downloads ask for ?save=1, which the server paces and limits to a few
+   at a time (see serve.py); one turned away with 503 waits and tries again.
+   One episode is saved at a time, in the order asked. The service worker
+   serves saved parts back with byte-range support; see sw.js. */
 
 const AUDIO_CACHE = "cs-audio-v1";
-const MAX_CACHED_EPISODES = 3;          // ~3 x 50 MB
+const SAVE_RETRY_MS = 30000;           // when the server says busy without a Retry-After
 
-/* Saving is paced at this multiple of the audio's own bitrate rather than
-   pulling ~50 MB per episode as fast as the link allows. The server sits on a
-   ~5 Mbps home uplink: 15 listeners x 4 x 64 kbps is ~3.8 Mbps, so everyone's
-   live stream and seeks stay responsive. 4x still finishes a whole episode
-   while its first part plays. Set to 0 to download at full speed. */
-const PREFETCH_SPEEDUP = 4;
-
-let prefetchCtl = null;
-let prefetchedFor = null;
-let offlineUI = { state: "idle", pct: 0 };
+const saving = {
+  queue: [],            // episodes waiting their turn
+  ep: null,             // the one downloading now
+  pct: 0,
+  busy: false,          // the server's save slots are full; waiting to retry
+  ctl: null,
+  failed: Object.create(null),         // id -> true: the last attempt failed
+};
 
 /* CacheStorage only exists in a secure context (https, or localhost). */
 function cacheSupported() {
@@ -1972,9 +2074,16 @@ function pathOf(url) {
   try { return new URL(url, location.origin).pathname; } catch (e) { return url; }
 }
 
-function setOffline(state, pct) {
-  offlineUI = { state: state, pct: pct || 0 };
-  renderOfflineChip();
+const isSaved = (ep) => store.cachedEps.indexOf(ep.id) !== -1;
+const epBytes = (ep) => ep.parts.reduce((sum, p) => sum + (p.bytes || 0), 0);
+const fmtMB = (bytes) => String(Math.max(1, Math.round(bytes / 1e6)));
+
+/* What the cloud button shows for an episode. */
+function saveState(ep) {
+  if (isSaved(ep)) return "ready";
+  if (saving.ep === ep) return saving.busy ? "queued" : "saving";
+  if (saving.queue.indexOf(ep) !== -1) return "queued";
+  return saving.failed[ep.id] ? "error" : "idle";
 }
 
 function renderOfflineChip() {
@@ -1982,45 +2091,106 @@ function renderOfflineChip() {
   if (!chip) return;
   const label = $("#offline-label");
 
-  if (!cacheSupported()) { chip.hidden = true; return; }
-  chip.hidden = !cur;
-  chip.dataset.state = offlineUI.state;
-  chip.setAttribute("aria-pressed", String(store.ui.offlineCache));
+  if (!cacheSupported() || !cur) { chip.hidden = true; return; }
+  chip.hidden = false;
+  const ep = cur.ep;
+  const state = saveState(ep);
+  chip.dataset.state = state;
 
-  let full;
-  if (!store.ui.offlineCache)            full = t("offline.off");
-  else if (offlineUI.state === "saving") full = t("offline.saving", { pct: offlineUI.pct });
-  else if (offlineUI.state === "ready")  full = t("offline.ready");
-  else if (offlineUI.state === "error")  full = t("offline.error");
-  else                                   full = t("offline.idle");
+  const mb = fmtMB(epBytes(ep));
+  const full = {
+    idle: t("offline.save", { mb: mb }),
+    queued: t("offline.queued"),
+    saving: t("offline.saving", { pct: saving.pct }),
+    ready: t("offline.ready"),
+    error: t("offline.error"),
+  }[state];
+  const hint = {
+    idle: t("offline.hintSave"), queued: t("offline.hintStop"), saving: t("offline.hintStop"),
+    ready: t("offline.hintDelete"), error: t("offline.hintSave"),
+  }[state];
 
   /* The Greek wording is long; on a phone the icon carries the meaning and the
      full text lives in the tooltip / accessible name. */
   const compact = window.matchMedia("(max-width: 700px)").matches && !npIsOpen();
-  if (!compact) {
-    label.textContent = full;
-  } else if (store.ui.offlineCache && offlineUI.state === "saving") {
-    label.textContent = offlineUI.pct + "%";
-  } else if (offlineUI.state === "error") {
-    label.textContent = "!";
-  } else {
-    label.textContent = "";
-  }
-  chip.setAttribute("aria-label", full + " — " + t("offline.hint"));
-  chip.title = full + " — " + t("offline.hint");
+  label.textContent = !compact ? full
+    : state === "saving" ? saving.pct + "%"
+    : state === "queued" ? "…"
+    : state === "error" ? "!" : "";
+  chip.setAttribute("aria-label", full + " — " + hint);
+  chip.title = full + " — " + hint;
 }
 
-function schedulePrefetch() {
+/* The cloud button: save the episode, stop saving it, or delete it. */
+async function offlineAction() {
   if (!cur) return;
-  if (prefetchedFor === cur.ep.id) { renderOfflineChip(); return; }
-  prefetchedFor = cur.ep.id;
-  prefetchEpisode(cur.ep, cur.part).catch(() => {});
+  const ep = cur.ep;
+  const state = saveState(ep);
+  if (state === "ready") {
+    if (confirm(t("offline.confirmDelete", { mb: fmtMB(epBytes(ep)) }))) await deleteSaved(ep);
+  } else if (state === "saving" || state === "queued") {
+    if (confirm(t("offline.confirmStop"))) stopSaving(ep);
+  } else {
+    await requestSave(ep);
+  }
+  renderOfflineChip();
 }
 
-/* Bytes per second to save a part at; 0 = unthrottled. */
-function partRate(part) {
-  if (!PREFETCH_SPEEDUP || !part.dur || !part.bytes) return 0;
-  return (part.bytes / part.dur) * PREFETCH_SPEEDUP;
+async function requestSave(ep) {
+  if (!cacheSupported() || isSaved(ep) || saving.ep === ep ||
+      saving.queue.indexOf(ep) !== -1) return;
+  /* Fail early, rather than an hour in, when the device has no room. */
+  try {
+    const est = navigator.storage && navigator.storage.estimate &&
+      await navigator.storage.estimate();
+    if (est && est.quota && est.quota - (est.usage || 0) < epBytes(ep) * 1.1) {
+      showToast(t("offline.full"));
+      return;
+    }
+  } catch (e) { /* unknown: try anyway */ }
+  /* Ask the browser not to evict saved episodes under storage pressure. */
+  try {
+    if (navigator.storage && navigator.storage.persist &&
+        !(await navigator.storage.persisted())) await navigator.storage.persist();
+  } catch (e) { /* not fatal */ }
+  delete saving.failed[ep.id];
+  saving.queue.push(ep);
+  renderOfflineChip();
+  pumpSaves();
+}
+
+function stopSaving(ep) {
+  saving.queue = saving.queue.filter((e) => e !== ep);
+  if (saving.ep === ep && saving.ctl) saving.ctl.abort();
+  renderOfflineChip();
+}
+
+async function pumpSaves() {
+  if (saving.ep || !saving.queue.length) return;
+  const ep = saving.queue.shift();
+  saving.ep = ep;
+  saving.pct = 0;
+  saving.busy = false;
+  saving.ctl = new AbortController();
+  renderOfflineChip();
+  try {
+    await saveEpisode(ep, saving.ctl.signal);
+    noteCached(ep.id);
+    showToast(t("offline.done", { title: ep.title }));
+  } catch (err) {
+    if (!saving.ctl.signal.aborted) {
+      console.warn("Saving for offline failed:", ep.id, err);
+      saving.failed[ep.id] = true;
+      showToast(t(err && err.name === "QuotaExceededError" ? "offline.full" : "offline.failed"));
+    }
+  }
+  saving.ep = null;
+  saving.ctl = null;
+  saving.busy = false;
+  await pruneAudioCache().catch(() => {});       // parts of a stopped save
+  renderOfflineChip();
+  renderSeasons();                                // the "saved" mark
+  pumpSaves();
 }
 
 /* Resolves after `ms`, or straight away once `signal` aborts. */
@@ -2032,118 +2202,78 @@ function delay(ms, signal) {
   });
 }
 
-/* Download one part into the cache, reporting 0..1 progress, at no more than
-   `rate` bytes/s. Not reading the body is what slows the transfer: TCP flow
-   control pushes the back-pressure all the way to the server. */
-async function cachePart(cache, part, signal, onProgress, rate) {
-  const url = part.url;
-  const res = await fetch(url, { signal: signal });
-  if (!res.ok) throw new Error("HTTP " + res.status);
-
-  const total = parseInt(res.headers.get("Content-Length") || "0", 10) || part.bytes || 0;
-  if (!res.body || (!onProgress && !rate)) {
-    await cache.put(url, res);
-    return;
-  }
-  const reader = res.body.getReader();
-  const chunks = [];
-  const started = performance.now();
-  let got = 0;
-  for (;;) {
-    const step = await reader.read();
-    if (step.done) break;
-    chunks.push(step.value);
-    got += step.value.length;
-    if (onProgress && total) onProgress(Math.min(1, got / total));
-    if (rate) {
-      const ahead = (got / rate) * 1000 - (performance.now() - started);
-      if (ahead > 50) await delay(ahead, signal);
+async function saveEpisode(ep, signal) {
+  const cache = await caches.open(AUDIO_CACHE);
+  const total = epBytes(ep) || ep.parts.length;
+  let before = 0;                                 // bytes of the parts already done
+  for (const part of ep.parts) {
+    const size = part.bytes || 1;
+    if (!(await cache.match(pathOf(part.url)))) {
+      await savePart(cache, part, signal, (got) => {
+        const pct = Math.min(99, Math.floor(((before + got) / total) * 100));
+        if (pct !== saving.pct) { saving.pct = pct; renderOfflineChip(); }
+      });
     }
+    before += size;
   }
-  const blob = new Blob(chunks, { type: "audio/mpeg" });
-  await cache.put(url, new Response(blob, {
-    status: 200,
-    headers: { "Content-Type": "audio/mpeg", "Content-Length": String(blob.size) },
-  }));
 }
 
-async function prefetchEpisode(ep, fromPart) {
-  if (prefetchCtl) prefetchCtl.abort();
-  if (!cacheSupported() || !store.ui.offlineCache) { setOffline("idle"); return; }
-
-  const ctl = new AbortController();
-  prefetchCtl = ctl;
-
-  /* Ask the browser not to evict this data under pressure. */
-  try {
-    if (navigator.storage && navigator.storage.persist) {
-      const already = await navigator.storage.persisted();
-      if (!already) await navigator.storage.persist();
-    }
-  } catch (e) { /* not fatal */ }
-
-  const cache = await caches.open(AUDIO_CACHE);
-
-  /* The part playing right now is already being buffered by the <audio>
-     element, so fetch it last -- the parts *ahead* are what a tunnel eats. */
-  const order = [];
-  for (let i = fromPart + 1; i < ep.parts.length; i++) order.push(ep.parts[i]);
-  for (let i = 0; i < fromPart; i++) order.push(ep.parts[i]);
-  order.push(ep.parts[fromPart]);
-
-  const total = order.length;
-  let done = 0;
-  setOffline("saving", 0);
-
-  for (const part of order) {
-    if (ctl.signal.aborted) return;
-    const already = await cache.match(pathOf(part.url));
-    if (already) {
-      done++;
-      setOffline("saving", Math.round((done / total) * 100));
+/* One part into the cache. The server sends it at its paced rate; while
+   its save slots are all taken it answers 503, and this waits its turn. */
+async function savePart(cache, part, signal, onProgress) {
+  for (;;) {
+    if (signal.aborted) throw new DOMException("stopped", "AbortError");
+    const res = await fetch(part.url + "?save=1", { signal: signal, cache: "no-store" });
+    if (res.status === 503) {
+      saving.busy = true;
+      renderOfflineChip();
+      const after = parseInt(res.headers.get("Retry-After"), 10);
+      await delay(after > 0 ? after * 1000 : SAVE_RETRY_MS, signal);
       continue;
     }
-    try {
-      await cachePart(cache, part, ctl.signal, (frac) => {
-        setOffline("saving", Math.round(((done + frac) / total) * 100));
-      }, partRate(part));
-      done++;
-      setOffline("saving", Math.round((done / total) * 100));
-    } catch (err) {
-      if (ctl.signal.aborted || err.name === "AbortError") return;
-      console.warn("offline cache failed for", part.url, err);
-      setOffline("error");
-      return;
-    }
-  }
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    if (saving.busy) { saving.busy = false; renderOfflineChip(); }
 
-  noteCached(ep.id);
-  setOffline("ready", 100);
-  renderSeasons();                                // show the "saved" mark
-
-  /* One part of the next episode too, so autoplay does not stall either. It
-     is deliberately not recorded in cachedEps: that list holds whole episodes
-     only, and a one-part lookahead must not push one of those out. */
-  const nx = upNext(ep);
-  if (nx && (store.ui.autoplay || inQueue(nx)) && !ctl.signal.aborted) {
-    try {
-      if (!(await cache.match(pathOf(nx.parts[0].url)))) {
-        await cachePart(cache, nx.parts[0], ctl.signal, null, partRate(nx.parts[0]));
+    const chunks = [];
+    let got = 0;
+    if (res.body) {
+      const reader = res.body.getReader();
+      for (;;) {
+        const step = await reader.read();
+        if (step.done) break;
+        chunks.push(step.value);
+        got += step.value.length;
+        onProgress(got);
       }
-    } catch (e) { /* best effort */ }
+    } else {
+      chunks.push(await res.arrayBuffer());
+    }
+    const blob = new Blob(chunks, { type: "audio/mpeg" });
+    await cache.put(part.url, new Response(blob, {
+      status: 200,
+      headers: { "Content-Type": "audio/mpeg", "Content-Length": String(blob.size) },
+    }));
+    return;
   }
-  pruneAudioCache().catch(() => {});
 }
 
 /* Records a fully saved episode, most recent first. */
 function noteCached(id) {
-  update("cachedEps", (c) => [id].concat(c.filter((x) => x !== id))
-    .slice(0, MAX_CACHED_EPISODES));
+  update("cachedEps", (c) => [id].concat(c.filter((x) => x !== id)));
 }
 
-/* Keep only the most recent few episodes; the archive is 20 GB and the device
-   is not. Also reconciles cachedEps with what is really stored, since the
-   browser may evict the cache on its own. */
+async function deleteSaved(ep) {
+  if (!cacheSupported()) return;
+  const cache = await caches.open(AUDIO_CACHE);
+  for (const part of ep.parts) await cache.delete(pathOf(part.url));
+  update("cachedEps", (c) => c.filter((x) => x !== ep.id));
+  renderSeasons();
+}
+
+/* Keeps the cache to the episodes saved whole, and the one being saved.
+   Removes leftovers: a stopped save's parts, or parts the index no longer
+   points at (an episode now served from a smaller copy). Also reconciles
+   cachedEps with what is really stored: the browser may evict on its own. */
 async function pruneAudioCache() {
   if (!cacheSupported()) return;
   const cache = await caches.open(AUDIO_CACHE);
@@ -2152,37 +2282,22 @@ async function pruneAudioCache() {
 
   store.cachedEps = load("cachedEps");             // another tab may have saved one
   const keepIds = store.cachedEps.filter((id) => BY_ID[id] &&
-    BY_ID[id].parts.every((p) => have.has(pathOf(p.url)))).slice(0, MAX_CACHED_EPISODES);
+    BY_ID[id].parts.every((p) => have.has(pathOf(p.url))));
 
   const keep = new Set();
   const keepEp = (ep) => ep.parts.forEach((p) => keep.add(pathOf(p.url)));
   keepIds.forEach((id) => keepEp(BY_ID[id]));
-  /* ...plus the episode playing now (it may still be downloading) and the
-     first part of the one autoplay moves on to. */
-  if (cur) {
-    keepEp(cur.ep);
-    const nx = upNext(cur.ep);
-    if (nx) keep.add(pathOf(nx.parts[0].url));
-  }
+  if (saving.ep) keepEp(saving.ep);
   for (const req of keys) {
     if (!keep.has(new URL(req.url).pathname)) await cache.delete(req);
   }
 
   const changed = keepIds.join("\n") !== store.cachedEps.join("\n");
   store.cachedEps = keepIds;
-  write("cachedEps", keepIds);
-  if (changed) renderSeasons();
-}
-
-async function clearAudioCache() {
-  if (!cacheSupported()) return;
-  if (prefetchCtl) prefetchCtl.abort();
-  await caches.delete(AUDIO_CACHE);
-  store.cachedEps = [];
-  write("cachedEps", []);
-  prefetchedFor = null;
-  setOffline("idle");
-  renderSeasons();
+  if (changed) {
+    write("cachedEps", keepIds);
+    renderSeasons();
+  }
 }
 
 /* ================================================================ network */
@@ -2351,6 +2466,7 @@ async function boot() {
   SEASONS = json.seasons;
   FLAT = [];
   for (const s of SEASONS) {
+    SEASON_BY_NUM[s.num] = s;
     for (const ep of s.episodes) {
       ep._cps = Array.from(ep.title);
       ep._norm = ep._cps.map(normCP).join("");
@@ -2362,6 +2478,7 @@ async function boot() {
     }
   }
   findSeries();
+  dropStalePositions();
 
   /* The first time, everything already here counts as seen: "new" means
      added since this browser started using the app. */
@@ -2373,21 +2490,34 @@ async function boot() {
 
   $("#status").hidden = true;
   $("#filter-unheard").setAttribute("aria-pressed", String(store.ui.unheardOnly));
-  $("#filter-unheard").textContent =
-    t(store.ui.unheardOnly ? "filter.unheardOn" : "filter.unheard");
-  $("#view-series").setAttribute("aria-pressed", String(store.ui.view === "series"));
   applyI18n();
-  render();
 
-  /* One at a time, so a failure in one cannot skip the rest. A shared link
-     takes the place of the last episode. */
-  [() => { if (!openFromHash()) restoreLast(); }, setupInstall, renderNetBanner,
+  /* One at a time, so a failure in one cannot skip the rest -- nor leave a
+     blank page. A shared link takes the place of the last episode. */
+  [render, () => { if (!openFromHash()) restoreLast(); }, setupInstall, renderNetBanner,
    () => { pruneAudioCache().catch(() => {}); }].forEach((step) => {
     try { step(); } catch (e) { console.error(e); }
   });
 
   if (json.warnings && json.warnings.length) {
     console.warn("index.json warnings:", json.warnings);
+  }
+}
+
+/* A saved position can point past an episode's last part: the episode was
+   re-split or corrected in the archive since, or the state is old or hand
+   edited. Such a position means nothing any more, and reading it would
+   break rendering on every load, so it is dropped. */
+function dropStalePositions() {
+  const stale = (id, part) => BY_ID[id] && part >= BY_ID[id].parts.length;
+  if (Object.keys(store.progress).some((id) => stale(id, store.progress[id].part))) {
+    update("progress", (p) => {
+      Object.keys(p).forEach((id) => { if (stale(id, p[id].part)) delete p[id]; });
+    });
+  }
+  if (store.last && stale(store.last.id, store.last.part)) {
+    store.last = null;
+    saveLast();
   }
 }
 
