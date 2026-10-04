@@ -3,7 +3,8 @@
 # writable, rebuild the index from whatever is actually on disk, then serve.
 #
 # With "fetch" as the command (docker run ... fetch --every 6h) the container
-# runs the downloader instead of the server: see fetch_new.py.
+# runs the downloader instead of the server: see fetch_new.py. With "lite" it
+# makes the smaller copies once (make_lite.py) and rebuilds the index.
 set -eu
 
 ARCHIVE_ROOT="${ARCHIVE_ROOT:-/archive}"
@@ -11,7 +12,8 @@ HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8080}"
 REBUILD_INDEX="${REBUILD_INDEX:-1}"
 INDEX_OUT="${INDEX_OUT:-/data/index.json}"
-export ARCHIVE_ROOT INDEX_OUT
+LITE_ROOT="${LITE_ROOT:-}"
+export ARCHIVE_ROOT INDEX_OUT LITE_ROOT
 
 if [ ! -d "$ARCHIVE_ROOT" ]; then
   echo "ERROR: archive not mounted at $ARCHIVE_ROOT" >&2
@@ -59,6 +61,14 @@ if [ "${1:-}" = "fetch" ]; then
     exit 1
   fi
   exec python3 /app/_site/fetch_new.py "$@"
+fi
+
+if [ "${1:-}" = "lite" ]; then
+  shift
+  python3 /app/_site/make_lite.py "$@"
+  case " $* " in *" --dry-run "*) exit 0 ;; esac
+  python3 /app/_site/build_index.py || true     # 1 = the scan has warnings
+  exit 0
 fi
 
 if [ "$REBUILD_INDEX" != "0" ] || [ ! -f "$INDEX_OUT" ]; then

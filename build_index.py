@@ -6,6 +6,9 @@ Reads the archive in place. Never moves, renames, or copies audio.
 Layout expected:
     <archive root>/<N>ος Κύκλος Εκπομπών/<Title> - <D> <Month> <YYYY>/<n>.mp3
 
+Where make_lite.py has made a smaller copy of a part (in $LITE_ROOT, same
+layout), the index points at the copy instead, under /_lite/.
+
 Usage:
     python3 _site/build_index.py [--no-durations] [--jobs N] [--allow-empty]
 """
@@ -26,6 +29,8 @@ SITE_DIR = os.path.dirname(os.path.abspath(__file__))
 # somewhere else entirely.
 ARCHIVE_ROOT = os.environ.get("ARCHIVE_ROOT") or os.path.dirname(SITE_DIR)
 OUT_PATH = os.environ.get("INDEX_OUT") or os.path.join(SITE_DIR, "index.json")
+LITE_ROOT = os.environ.get("LITE_ROOT")
+LITE_PREFIX = "/_lite"       # where serve.py serves LITE_ROOT
 
 # Greek month names in the genitive, as they appear in folder names.
 # The second spelling of February is a typo present in exactly one folder
@@ -89,6 +94,17 @@ def url_for(*segments):
     return "/" + "/".join(quote(s) for s in segments)
 
 
+def up_to_date(src, copy):
+    """A smaller copy counts only while it is at least as new as its
+    original: a part replaced in the archive must not be shadowed by the
+    copy of the old one."""
+    try:
+        c = os.stat(copy)
+        return c.st_size > 0 and c.st_mtime >= os.stat(src).st_mtime
+    except OSError:
+        return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-durations", action="store_true",
@@ -96,15 +112,19 @@ def main():
     ap.add_argument("--jobs", type=int, default=min(16, (os.cpu_count() or 4) * 4))
     ap.add_argument("--root", help="archive root (overrides $ARCHIVE_ROOT)")
     ap.add_argument("--out", help="output path (overrides $INDEX_OUT)")
+    ap.add_argument("--lite", help="folder of smaller copies (overrides $LITE_ROOT)")
     ap.add_argument("--allow-empty", action="store_true",
                     help="replace an existing index even if the scan found no episodes")
     args = ap.parse_args()
 
-    global ARCHIVE_ROOT, OUT_PATH
+    global ARCHIVE_ROOT, OUT_PATH, LITE_ROOT
     if args.root:
         ARCHIVE_ROOT = os.path.abspath(args.root)
     if args.out:
         OUT_PATH = os.path.abspath(args.out)
+    if args.lite:
+        LITE_ROOT = args.lite
+    LITE_ROOT = os.path.abspath(LITE_ROOT) if LITE_ROOT else None
     if not os.path.isdir(ARCHIVE_ROOT):
         print(f"Archive root does not exist: {ARCHIVE_ROOT}", file=sys.stderr)
         return 2
@@ -128,7 +148,7 @@ def main():
 
     seasons = []
     probe_jobs = []  # (path, part_dict)
-    n_eps = n_parts = 0
+    n_eps = n_parts = n_lite = 0
 
     for num, sdir in season_dirs:
         spath = os.path.join(ARCHIVE_ROOT, sdir)
@@ -192,9 +212,14 @@ def main():
             parts = []
             for n, fname in mp3s:
                 fpath = os.path.join(epath, fname)
+                url = url_for(sdir, ename, fname)
+                copy = LITE_ROOT and os.path.join(LITE_ROOT, sdir, ename, fname)
+                if copy and up_to_date(fpath, copy):
+                    fpath, url = copy, LITE_PREFIX + url       # probed and sized as served
+                    n_lite += 1
                 part = {
                     "n": n,
-                    "url": url_for(sdir, ename, fname),
+                    "url": url,
                     "dur": None,
                     "bytes": os.path.getsize(fpath),
                 }
@@ -264,7 +289,8 @@ def main():
     # the app has no use for it.
     data = {
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "counts": {"seasons": len(seasons), "episodes": n_eps, "parts": n_parts},
+        "counts": {"seasons": len(seasons), "episodes": n_eps, "parts": n_parts,
+                   "lite": n_lite},
         "infos": infos,
         "warnings": warnings,
         "seasons": seasons,
@@ -302,6 +328,8 @@ def main():
     print(f"  seasons:  {len(seasons)}")
     print(f"  episodes: {n_eps}")
     print(f"  parts:    {n_parts}")
+    if LITE_ROOT:
+        print(f"  smaller copies served: {n_lite}")
     if infos:
         print(f"\nInfo ({len(infos)}):")
         for i in infos:

@@ -8,8 +8,18 @@ Unlike `python3 -m http.server`, this handles HTTP Range requests (206 Partial
 Content), which is what lets the browser seek inside a part without first
 downloading the whole file.
 
+Two things protect a small home uplink shared by every listener:
+
+- A download made to save an episode for offline listening (the app adds
+  ?save=1) is sent at SAVE_KBPS, and at most SAVE_SLOTS of them run at once;
+  the rest get 503 and a Retry-After, and the app tries again later. Pacing
+  has to happen here: a browser reads a response at full speed however slowly
+  the page consumes it.
+- Smaller copies of high-bitrate parts, made by make_lite.py, are served from
+  LITE_ROOT under /_lite/. The index points at them; the archive is untouched.
+
 Usage:
-    python3 _site/serve.py [--port 8080] [--host 127.0.0.1]
+    python3 _site/serve.py [--port 8080] [--host 127.0.0.1] [--lite DIR]
 """
 
 import argparse
@@ -17,6 +27,8 @@ import os
 import re
 import shutil
 import ssl
+import threading
+import time
 import urllib.parse
 import sys
 from http import HTTPStatus
@@ -31,6 +43,24 @@ SITE_NAME = "_site"          # URL prefix -- kept fixed, sw.js depends on it
 # is not writable by the running user (see the container's /data).
 INDEX_OUT = os.environ.get("INDEX_OUT")
 INDEX_OUT = os.path.abspath(INDEX_OUT) if INDEX_OUT else None
+LITE_ROOT = os.environ.get("LITE_ROOT")
+LITE_ROOT = os.path.abspath(LITE_ROOT) if LITE_ROOT else None
+LITE_NAME = "_lite"          # URL prefix of the smaller copies
+
+
+def env_int(name, default):
+    try:
+        return max(0, int(os.environ.get(name, default)))
+    except ValueError:
+        return default
+
+
+# Offline saves: kbit/s each (0 = unpaced) and how many at once (0 = no cap).
+# 2 x 256 kbit/s leaves most of a 5 Mbit/s uplink to live listening.
+SAVE_KBPS = env_int("SAVE_KBPS", 256)
+SAVE_SLOTS = env_int("SAVE_SLOTS", 2)
+SAVE_RETRY_AFTER = 30        # seconds, for a save turned away while slots are full
+_save_slots = threading.BoundedSemaphore(SAVE_SLOTS) if SAVE_SLOTS else None
 
 RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 NO_CACHE_EXT = (".html", ".js", ".css", ".json", ".webmanifest")
@@ -64,7 +94,31 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
 
     def __init__(self, *args, **kwargs):
         self._range = None  # (start, length) for the in-flight response
+        self._save = False  # the in-flight response is an offline save (paced)
         super().__init__(*args, directory=ARCHIVE_ROOT, **kwargs)
+
+    def do_GET(self):
+        """An offline save takes one of the save slots for as long as it
+        runs. With all of them busy it is turned away at once rather than
+        queued here, where it would hold a connection open doing nothing."""
+        split = urllib.parse.urlsplit(self.path)
+        self._save = (split.path.lower().endswith(".mp3") and
+                      "1" in urllib.parse.parse_qs(split.query).get("save", []))
+        if self._save and _save_slots and not _save_slots.acquire(blocking=False):
+            self.send_response(HTTPStatus.SERVICE_UNAVAILABLE)
+            self.send_header("Retry-After", str(SAVE_RETRY_AFTER))
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        try:
+            super().do_GET()
+        finally:
+            if self._save and _save_slots:
+                _save_slots.release()
+
+    def do_HEAD(self):
+        self._save = False       # the handler is reused across keep-alive requests
+        super().do_HEAD()
 
     # -- routing ---------------------------------------------------------
     def allowed(self, name):
@@ -78,6 +132,8 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
         if name.startswith(prefix + "/"):
             rest = name[len(prefix) + 1:]
             return rest in SITE_FILES or bool(ICON_RE.fullmatch(rest))
+        if name.startswith("/" + LITE_NAME + "/") and not LITE_ROOT:
+            return False
         return name.lower().endswith(".mp3")
 
     def list_directory(self, path):
@@ -94,12 +150,13 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
         prefix = "/" + SITE_NAME
         if INDEX_OUT and clean == prefix + "/index.json":
             return INDEX_OUT
-        if clean == prefix or clean.startswith(prefix + "/"):
-            saved, self.directory = self.directory, SITE_DIR
-            try:
-                return super().translate_path(clean[len(prefix):] or "/")
-            finally:
-                self.directory = saved
+        for pre, root in ((prefix, SITE_DIR), ("/" + LITE_NAME, LITE_ROOT)):
+            if root and (clean == pre or clean.startswith(pre + "/")):
+                saved, self.directory = self.directory, root
+                try:
+                    return super().translate_path(clean[len(pre):] or "/")
+                finally:
+                    self.directory = saved
         return super().translate_path(path)
 
     # -- range-aware file serving ----------------------------------------
@@ -193,19 +250,30 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
             raise
 
     def copyfile(self, source, outputfile):
-        if self._range is None:
+        if self._range is None and not (self._save and SAVE_KBPS):
             try:
                 return super().copyfile(source, outputfile)
             except CLIENT_GONE:
                 return None
-        _, remaining = self._range
+        remaining = self._range[1] if self._range else None   # None: to the end
+        # Small chunks when paced, so the line sees an even trickle rather
+        # than 64 KB bursts with long gaps.
+        size = 16 * 1024 if self._save and SAVE_KBPS else 64 * 1024
+        rate = SAVE_KBPS * 1000 / 8 if self._save else 0       # bytes/s
+        started, sent = time.monotonic(), 0
         try:
-            while remaining > 0:
-                chunk = source.read(min(64 * 1024, remaining))
+            while remaining is None or remaining > 0:
+                chunk = source.read(size if remaining is None else min(size, remaining))
                 if not chunk:
                     break
                 outputfile.write(chunk)
-                remaining -= len(chunk)
+                sent += len(chunk)
+                if remaining is not None:
+                    remaining -= len(chunk)
+                if rate:
+                    ahead = sent / rate - (time.monotonic() - started)
+                    if ahead > 0:
+                        time.sleep(ahead)
         except CLIENT_GONE:
             pass          # client seeked away or closed the tab
 
@@ -226,6 +294,9 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
                 # index.json alone is ~800 KB.
                 if clean.endswith(NO_CACHE_EXT) or clean.endswith("/"):
                     self.send_header("Cache-Control", "no-cache")
+                elif self._save:
+                    # The app keeps its own copy; the HTTP cache need not.
+                    self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
     def _has_header(self, lower_name):
@@ -291,11 +362,14 @@ def main():
     ap.add_argument("--cert", help="TLS certificate (PEM) -- serve over HTTPS")
     ap.add_argument("--key", help="TLS private key (PEM)")
     ap.add_argument("--root", help="archive root (overrides $ARCHIVE_ROOT)")
+    ap.add_argument("--lite", help="folder of smaller copies (overrides $LITE_ROOT)")
     args = ap.parse_args()
 
-    global ARCHIVE_ROOT
+    global ARCHIVE_ROOT, LITE_ROOT
     if args.root:
         ARCHIVE_ROOT = os.path.abspath(args.root)
+    if args.lite:
+        LITE_ROOT = os.path.abspath(args.lite)
     if not os.path.isdir(ARCHIVE_ROOT):
         print(f"Archive root does not exist: {ARCHIVE_ROOT}", file=sys.stderr)
         return 1
@@ -319,6 +393,10 @@ def main():
     print(f"  site    : {SITE_DIR}")
     if INDEX_OUT:
         print(f"  index   : {INDEX_OUT}")
+    if LITE_ROOT:
+        print(f"  lite    : {LITE_ROOT}")
+    print(f"  saves   : " + (f"{SAVE_KBPS} kbit/s each" if SAVE_KBPS else "unpaced") +
+          (f", {SAVE_SLOTS} at once" if SAVE_SLOTS else ""))
     print(f"  open    : {url}")
     if scheme == "http" and args.host not in ("127.0.0.1", "localhost", "::1"):
         print("  note    : install/offline need HTTPS on a non-localhost host"
