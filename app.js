@@ -946,6 +946,12 @@ function play() {
     loadEpisode(cur.ep, cur.part, lastGood, true);
     return;
   }
+  /* An episode that ended where it is (see onEnded) plays again from its
+     first part, not from the start of its last one. */
+  if (audio.ended && cur.part === cur.ep.parts.length - 1) {
+    loadEpisode(cur.ep, 0, 0, true);
+    return;
+  }
   const p = audio.play();
   if (p && p.catch) p.catch(() => {});
 }
@@ -1015,17 +1021,16 @@ function onEnded() {
   const nx = upNext(ep);                          // before it is marked listened
   setListened(ep.id, true);                       // all parts played through
   update("progress", (p) => { delete p[ep.id]; });
-  if (nx) {
-    /* The next episode starts by itself only with autoplay on, or inside a
-       series being played through. Otherwise it is put in place, paused,
-       so the next Play carries on from there. */
-    const go = !stop && (store.ui.autoplay || inQueue(nx));
+  /* Only autoplay, or a series being played through, moves on to the next
+     episode. A sleep timer set to "end of episode" still moves on, paused. */
+  if (nx && (store.ui.autoplay || inQueue(nx))) {
     const p = resumeAt(nx);                        // it may have been started before
-    loadEpisode(nx, p.part, p.time, go);
+    loadEpisode(nx, p.part, p.time, !stop);
     return;
   }
-  /* Caught up with the newest episode: there is nothing to continue, so the
-     Continue card goes and the next start does not bring this one back. */
+  /* Autoplay is off, or this was the newest episode: playback stops on this
+     one. There is nothing to continue, so the Continue card goes and the
+     next start does not bring this one back. */
   store.last = null;
   saveLast();
   dirty = false;
