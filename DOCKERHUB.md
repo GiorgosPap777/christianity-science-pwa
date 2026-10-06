@@ -56,7 +56,8 @@ reported in the container log rather than silently skipped.
 | `LITE_ROOT` | `/data/lite` | the smaller 64 kbps copies (see below) |
 | `PLAY_KBPS` | `512` | listening speed after the first `PLAY_BURST` bytes of each request, in kbit/s; `0` is full speed |
 | `PLAY_BURST` | `131072` | bytes sent at full speed first, so playback starts at once |
-| `SAVE_KBPS` | `256` | speed of each offline save, in kbit/s; `0` is full speed |
+| `SAVE_KBPS` | `1024` | speed of each offline save, in kbit/s; `0` is full speed |
+| `SAVE_IDLE_KBPS` | `2048` | speed of each offline save while no one is streaming audio |
 | `SAVE_SLOTS` | `2` | offline saves running at once, across all listeners; `0` is no limit |
 
 Runs as **uid 10001**. If your archive is not readable by that user, add
@@ -141,7 +142,8 @@ player and the fetcher must share the `/data` volume.
 - **Installable (PWA)** — full screen, own home-screen icon, works offline.
 - **Save for offline** — a button in the player saves an episode to the
   device; nothing is downloaded unless you ask. The server paces saves
-  (`SAVE_KBPS`, `SAVE_SLOTS`) so they cannot saturate a home uplink.
+  (`SAVE_KBPS`, faster while no one is listening, and `SAVE_SLOTS`) so they
+  cannot saturate a home uplink: a 40 MB episode takes 3–5 minutes.
 - **Quick seeking on a small uplink** — listening is paced too (`PLAY_KBPS`,
   after a `PLAY_BURST` sent at once), so a seek never waits behind the rest
   of a part already on its way.

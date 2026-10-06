@@ -22,9 +22,11 @@ services:
       # not wait behind the rest of the part on a small uplink. 0 = unpaced.
       # PLAY_KBPS: "512"
       # PLAY_BURST: "131072"
-      # Saving an episode for offline listening is paced to this many kbit/s,
-      # with at most SAVE_SLOTS saves at once across all listeners.
-      # SAVE_KBPS: "256"
+      # Saving an episode for offline listening is paced to SAVE_KBPS, or
+      # SAVE_IDLE_KBPS while no one is streaming audio, with at most
+      # SAVE_SLOTS saves at once across all listeners.
+      # SAVE_KBPS: "1024"
+      # SAVE_IDLE_KBPS: "2048"
       # SAVE_SLOTS: "2"
 
     # Runs as uid 10001 by default. Most archives are world-readable, so this

@@ -206,7 +206,8 @@ cannot be parsed — a missing part, non-contiguous numbering, an unreadable nam
 | `LITE_ROOT` | `/data/lite` (container) | the [smaller copies](#smaller-copies); unset, none are used |
 | `PLAY_KBPS` | `512` | listening speed after the first `PLAY_BURST` bytes of each request, in kbit/s; `0` is full speed |
 | `PLAY_BURST` | `131072` | bytes sent at full speed first, so playback starts at once |
-| `SAVE_KBPS` | `256` | speed of each offline save, in kbit/s; `0` is full speed |
+| `SAVE_KBPS` | `1024` | speed of each offline save, in kbit/s; `0` is full speed |
+| `SAVE_IDLE_KBPS` | `2048` | speed of each offline save while no one is streaming audio |
 | `SAVE_SLOTS` | `2` | offline saves running at once, across all listeners; `0` is no limit |
 
 `serve.py` also takes `--root`, `--lite`, `--host`, `--port`, `--cert`,
@@ -249,18 +250,21 @@ episode plays with no network, seeking included, and tapping the chip offers
 to delete it. Saving more episodes queues them; there is no cap beyond the
 device's storage, which is checked first.
 
-At the paced rate below, a 40 MB episode takes about 20 minutes. The chip
-says roughly how long before it starts and how long is left while it runs.
+At the paced rates below, a 40 MB episode takes about 5 minutes, or under 3
+while no one else is listening. The chip says roughly how long before it
+starts and how long is left while it runs.
 The download runs in the page, and a phone freezes a page left in the
 background unless it is playing, so the app asks to be kept open until the
 save finishes.
 
 A browser downloads as fast as the link allows, whatever the page asks, so
 the pacing happens on the server. A save asks for each part with `?save=1`,
-and `serve.py` sends those at `SAVE_KBPS` (256 kbit/s, four times the 64 kbps
-listening rate) and runs at most `SAVE_SLOTS` (2) at once, across everyone.
-Further saves get `503` with `Retry-After` and the app tries again shortly,
-so offline saves never take more than about 0.5 Mbit/s of the uplink.
+and `serve.py` sends those at `SAVE_KBPS` (1024 kbit/s) and runs at most
+`SAVE_SLOTS` (2) at once, across everyone. Further saves get `503` with
+`Retry-After` and the app tries again shortly. So while anyone is streaming,
+saves take at most 2 Mbit/s of a 5 Mbit/s uplink and leave the rest to
+listening. While no one is, each save goes at `SAVE_IDLE_KBPS` (2048 kbit/s),
+and drops back within a fraction of a second when someone starts to play.
 
 ## Why listening is paced too
 

@@ -116,6 +116,25 @@ function fmtTime(sec) {
   return h > 0 ? h + ":" + pad(m) + ":" + pad(s) : m + ":" + pad(s);
 }
 
+/* An episode's length for the list: "1 ώ 37 λ" reads faster than "97 λεπτά".
+   The words go to the tooltip and to screen readers, which would spell out
+   the letters. */
+function durationEl(sec) {
+  const all = Math.round(sec / 60), h = Math.floor(all / 60), m = all % 60;
+  const say = (hKey, mKey) => [h ? t(hKey, { n: h }) : "", m || !h ? t(mKey, { n: m }) : ""]
+    .filter(Boolean).join(" ");
+  const el = document.createElement("span");
+  const short = document.createElement("span");
+  short.setAttribute("aria-hidden", "true");
+  short.textContent = say("dur.h", "dur.m");
+  const words = document.createElement("span");
+  words.className = "vis-hidden";
+  words.textContent = el.title = say("dur.hours", "dur.minutes");
+  el.appendChild(short);
+  el.appendChild(words);
+  return el;
+}
+
 /* --------------------------------------------------------------- app data */
 
 let DATA = null;
@@ -483,9 +502,7 @@ function episodeRow(ep) {
     sub.appendChild(date);
     sub.insertAdjacentHTML("beforeend", '<span class="dot">·</span>');
   }
-  const dur = document.createElement("span");
-  dur.textContent = t("ep.duration", { n: Math.round(epTotal(ep) / 60) });
-  sub.appendChild(dur);
+  sub.appendChild(durationEl(epTotal(ep)));
 
   if (ep.parts.length !== 4) {
     sub.insertAdjacentHTML("beforeend", '<span class="dot">·</span>');
@@ -2133,9 +2150,10 @@ const AUDIO_CACHE = "cs-audio-v1";
    tab closes. */
 const SAVE_LOCK = "cs-saving:";
 const SAVE_RETRY_MS = 30000;           // when the server says busy without a Retry-After
-/* serve.py's default SAVE_KBPS, for the estimate before a save starts; once
-   it runs, the rate actually measured takes over. */
-const SAVE_KBPS_GUESS = 256;
+/* serve.py's default SAVE_KBPS, the slower of its two save rates, for the
+   estimate before a save starts; once it runs, the rate actually measured
+   takes over. */
+const SAVE_KBPS_GUESS = 1024;
 
 const saving = {
   queue: [],            // episodes waiting their turn

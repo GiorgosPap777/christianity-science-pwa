@@ -15,10 +15,10 @@ Three things protect a small home uplink shared by every listener:
   the line allows, and that queue (the router's, and the proxy's socket) is
   what the next seek -- anyone's -- waits behind.
 - A download made to save an episode for offline listening (the app adds
-  ?save=1) is sent at SAVE_KBPS, and at most SAVE_SLOTS of them run at once;
-  the rest get 503 and a Retry-After, and the app tries again later. Pacing
-  has to happen here: a browser reads a response at full speed however slowly
-  the page consumes it.
+  ?save=1) is sent at SAVE_KBPS, or SAVE_IDLE_KBPS while nobody is streaming
+  audio, and at most SAVE_SLOTS of them run at once; the rest get 503 and a
+  Retry-After, and the app tries again later. Pacing has to happen here: a
+  browser reads a response at full speed however slowly the page consumes it.
 - Smaller copies of high-bitrate parts, made by make_lite.py, are served from
   LITE_ROOT under /_lite/. The index points at them; the archive is untouched.
 
@@ -62,12 +62,25 @@ def env_int(name, default):
         return default
 
 
-# Offline saves: kbit/s each (0 = unpaced) and how many at once (0 = no cap).
-# 2 x 256 kbit/s leaves most of a 5 Mbit/s uplink to live listening.
-SAVE_KBPS = env_int("SAVE_KBPS", 256)
+# Offline saves: kbit/s each (0 = unpaced), kbit/s each while no one is
+# streaming audio (no faster than SAVE_KBPS if lower), and how many at once
+# (0 = no cap). On a 5 Mbit/s uplink, 2 x 1024 leaves 3 Mbit/s to listening;
+# 2 x 2048 still leaves room for the first burst of someone who starts. A
+# 40 MB episode takes about 5 minutes, or under 3.
+SAVE_KBPS = env_int("SAVE_KBPS", 1024)
+SAVE_IDLE_KBPS = env_int("SAVE_IDLE_KBPS", 2048)
 SAVE_SLOTS = env_int("SAVE_SLOTS", 2)
 SAVE_RETRY_AFTER = 30        # seconds, for a save turned away while slots are full
 _save_slots = threading.BoundedSemaphore(SAVE_SLOTS) if SAVE_SLOTS else None
+_streaming = 0               # listening responses being sent right now
+_streaming_lock = threading.Lock()
+
+
+def save_rate():
+    """Bytes/s for an offline save at this moment: faster while no one is
+    streaming audio, back to SAVE_KBPS as soon as someone is."""
+    kbps = SAVE_IDLE_KBPS if not _streaming and SAVE_IDLE_KBPS > SAVE_KBPS else SAVE_KBPS
+    return kbps * 1000 / 8
 
 # Listening: kbit/s after the first PLAY_BURST bytes (0 = unpaced). 512 keeps
 # a 64 kbps part 8x ahead of playback; the burst gets playback going at once.
@@ -279,7 +292,7 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
         """(bytes/s, unpaced bytes first) for the in-flight response; 0 bytes/s
         sends it at full speed."""
         if self._save:
-            return SAVE_KBPS * 1000 / 8, 0
+            return (save_rate() if SAVE_KBPS else 0), 0
         if not (self._mp3 and PLAY_KBPS):
             return 0, 0
         kbps = PLAY_KBPS
@@ -291,6 +304,21 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
         return kbps * 1000 / 8, PLAY_BURST
 
     def copyfile(self, source, outputfile):
+        """Counts as streaming, which slows offline saves, while it sends
+        audio that is not a save."""
+        global _streaming
+        listening = self._mp3 and not self._save
+        if listening:
+            with _streaming_lock:
+                _streaming += 1
+        try:
+            self._copy(source, outputfile)
+        finally:
+            if listening:
+                with _streaming_lock:
+                    _streaming -= 1
+
+    def _copy(self, source, outputfile):
         rate, burst = self.pace(source)
         if self._range is None and not rate:
             try:
@@ -316,6 +344,8 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
                 # No wait after the last chunk: a save would hold its slot,
                 # and the next request on this connection would wait too.
                 if rate and remaining > 0 and sent >= burst:
+                    if self._save:
+                        rate = save_rate()       # someone may have started listening
                     now = time.monotonic()
                     due = max(due or now, now - PACE_SLACK) + len(chunk) / rate
                     if due > now:
@@ -445,6 +475,8 @@ def main():
     print(f"  playback: " + (f"{PLAY_KBPS} kbit/s after {PLAY_BURST // 1024} KB" if PLAY_KBPS
                              else "unpaced"))
     print(f"  saves   : " + (f"{SAVE_KBPS} kbit/s each" if SAVE_KBPS else "unpaced") +
+          (f" ({SAVE_IDLE_KBPS} while no one is listening)"
+           if SAVE_KBPS and SAVE_IDLE_KBPS > SAVE_KBPS else "") +
           (f", {SAVE_SLOTS} at once" if SAVE_SLOTS else ""))
     print(f"  open    : {url}")
     if scheme == "http" and args.host not in ("127.0.0.1", "localhost", "::1"):

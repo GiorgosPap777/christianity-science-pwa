@@ -39,8 +39,9 @@ RUN chmod +x /app/_site/entrypoint.sh \
 # archive's ownership). /app stays read-only; only /data is written.
 RUN install -d -m 0777 /data
 
-# PLAY_KBPS / PLAY_BURST pace listening, and SAVE_KBPS / SAVE_SLOTS the
-# downloads made to save an episode for offline listening (see serve.py);
+# PLAY_KBPS / PLAY_BURST pace listening, and SAVE_KBPS / SAVE_IDLE_KBPS /
+# SAVE_SLOTS the downloads made to save an episode for offline listening
+# (see serve.py);
 # LITE_ROOT holds the smaller copies.
 ENV ARCHIVE_ROOT=/archive \
     HOST=0.0.0.0 \
@@ -50,7 +51,8 @@ ENV ARCHIVE_ROOT=/archive \
     LITE_ROOT=/data/lite \
     PLAY_KBPS=512 \
     PLAY_BURST=131072 \
-    SAVE_KBPS=256 \
+    SAVE_KBPS=1024 \
+    SAVE_IDLE_KBPS=2048 \
     SAVE_SLOTS=2 \
     PYTHONUNBUFFERED=1
 
