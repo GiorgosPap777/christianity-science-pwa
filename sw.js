@@ -10,7 +10,7 @@
    Registered with scope "/" (see the Service-Worker-Allowed header in serve.py)
    so it can intercept the audio living at the archive root, not just /_site/. */
 
-const VERSION = "v6";
+const VERSION = "v7";
 const SHELL = `cs-shell-${VERSION}`;
 const AUDIO = "cs-audio-v1";          // unversioned: survives shell updates
 

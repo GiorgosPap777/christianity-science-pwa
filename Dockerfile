@@ -21,7 +21,7 @@ LABEL org.opencontainers.image.title="Χριστιανισμός - Επιστή�
       org.opencontainers.image.url="https://hub.docker.com/r/giorgospap777/christianity-science-pwa" \
       org.opencontainers.image.documentation="https://github.com/GiorgosPap777/christianity-science-pwa#readme" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.version="1.3.1"
+      org.opencontainers.image.version="1.3.2"
 
 # ffprobe supplies the per-part durations the episode progress bar needs;
 # ffmpeg makes the smaller copies.

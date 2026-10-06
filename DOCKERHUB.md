@@ -95,8 +95,10 @@ is downloaded into `.incoming/` inside the archive and moved into its season
 folder only when every part is complete; an interrupted download carries on
 from the last complete part. Older broadcasts that are missing from the
 archive are listed in the log but not downloaded, since they may be missing on
-purpose; `--include-older` fetches them as well. `--dry-run` shows what would
-be downloaded, and `--max` (default 10) caps the episodes per run.
+purpose; `--include-older` fetches them as well. An episode whose download
+failed is tried again on the next run, even if a newer one was saved
+meanwhile. `--dry-run` shows what would be downloaded, and `--max` (default
+10) caps the episodes per run.
 
 The site sometimes lists a broadcast before all of its parts are up: a new
 episode with fewer than the usual 4 parts waits and is completed on a later
@@ -144,13 +146,17 @@ player and the fetcher must share the `/data` volume.
   after a `PLAY_BURST` sent at once), so a seek never waits behind the rest
   of a part already on its way.
 
-## Two things that will bite you
+## Three things that will bite you
 
 1. **Behind a reverse proxy, `Range` headers must be forwarded and responses
    must not be buffered**, or seeking inside an episode breaks. (nginx:
    `proxy_buffering off;`)
 2. **Installing the app and saving for offline require HTTPS** (or `localhost`).
    On a plain `http://192.168.x.x` the site works, but neither feature turns on.
+3. **Behind Cloudflare or another CDN, bypass its cache for `.mp3`.** On a
+   cache miss Cloudflare drops `Range` and fetches the whole part first, so a
+   seek waits for most of the part to cross your uplink. A Cache Rule, *URI
+   path ends with `.mp3`* → *Bypass cache*, fixes it.
 
 ## Tags
 

@@ -475,13 +475,14 @@ function episodeRow(ep) {
 
   const sub = document.createElement("div");
   sub.className = "ep-sub";
-  const date = document.createElement("span");
-  date.className = "ep-date";
   const dl = epDate(ep);
-  date.appendChild(highlight(dl, normalize(dl)));
-  sub.appendChild(date);
-
-  sub.insertAdjacentHTML("beforeend", '<span class="dot">·</span>');
+  if (dl) {                      // a folder whose date could not be read has none
+    const date = document.createElement("span");
+    date.className = "ep-date";
+    date.appendChild(highlight(dl, normalize(dl)));
+    sub.appendChild(date);
+    sub.insertAdjacentHTML("beforeend", '<span class="dot">·</span>');
+  }
   const dur = document.createElement("span");
   dur.textContent = t("ep.duration", { n: Math.round(epTotal(ep) / 60) });
   sub.appendChild(dur);
@@ -1016,10 +1017,16 @@ function loadEpisode(ep, part, time, autoplay, quiet) {
   retryOnline = false;
   setLoading(false);
 
+  /* A part put back paused (the last episode on opening the app, a shared
+     link) loads nothing until Play: on a small home uplink, a megabyte of
+     audio per app open adds up. Its length comes from the index meanwhile,
+     and a seek before Play waits in pendingSeek. Setting src starts the
+     load; Chrome's load() would fetch the metadata even with "none". */
+  audio.preload = autoplay ? "metadata" : "none";
   audio.src = ep.parts[part].url;
   audio.playbackRate = store.ui.speed;
   audio.volume = store.ui.volume;
-  audio.load();
+  if (autoplay) audio.load();
 
   $("#player").hidden = false;
   document.body.classList.remove("no-player");
@@ -1290,6 +1297,7 @@ function updatePlayerText() {
   [["season", epSeasonLabel(ep)],
    ["part", t("ep.part", { n: cur.part + 1, total: ep.parts.length })],
    ["date", epDate(ep)]].forEach((x) => {
+    if (!x[1]) return;
     const span = document.createElement("span");
     span.className = "sub-" + x[0];
     span.textContent = x[1];
@@ -1442,6 +1450,24 @@ function wire() {
     render();
   }));
 
+  /* On a narrow phone the toolbar's chips scroll sideways with no scrollbar:
+     fade the side that has more, so it shows there is more. */
+  const bar = $(".toolbar-btns");
+  const fade = () => {
+    const more = bar.scrollWidth - bar.clientWidth;
+    const start = bar.scrollLeft > 1, end = bar.scrollLeft < more - 1;
+    if (start || end) bar.dataset.fade = start && end ? "both" : start ? "start" : "end";
+    else delete bar.dataset.fade;
+  };
+  bar.addEventListener("scroll", fade, { passive: true });
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(fade);        // the bar, and labels that change
+    [bar].concat(Array.from(bar.children)).forEach((el) => ro.observe(el));
+  } else {
+    window.addEventListener("resize", fade);
+  }
+  fade();
+
   /* search */
   const search = $("#search");
   search.addEventListener("input", () => {
@@ -1573,6 +1599,7 @@ function wire() {
     saveUI();
   });
   const vol = $("#volume");
+  vol.hidden = isIOS();           // iOS ignores audio.volume: the slider would do nothing
   vol.value = String(store.ui.volume);
   setFill(vol);
   vol.addEventListener("input", () => {
@@ -1633,7 +1660,17 @@ function wire() {
     retryOnline = !audio.paused;
     setLoading(false);
     const saved = store.cachedEps.indexOf(cur.ep.id) !== -1;
-    showToast(t(!navigator.onLine && !saved ? "player.notSaved" : "player.loadError"));
+    const src = audio.src;
+    if (!navigator.onLine) {
+      showToast(t(saved ? "player.loadError" : "player.notSaved"));
+    } else {
+      /* A media error cannot tell a part missing from the archive from a
+         dead connection; one HEAD request can. */
+      const tell = (key) => { if (audio.src === src) showToast(t(key)); };
+      fetch(src, { method: "HEAD", cache: "no-store" })
+        .then((r) => tell(r.status === 404 ? "player.missing" : "player.loadError"))
+        .catch(() => tell("player.loadError"));
+    }
     updatePlayerText();
     markPlayingRow();
     renderNetBanner();
@@ -1678,8 +1715,9 @@ function wire() {
   const flush = () => persistPosition(true);
   window.addEventListener("pagehide", flush);
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") flush();
-    else if (handedOff && !isPlaying()) followOtherTab(false);
+    if (document.visibilityState === "hidden") { flush(); return; }
+    if (handedOff && !isPlaying()) followOtherTab(false);
+    recheckIndex();
   });
 
   /* Keep the page's bottom padding equal to the player's real height, which
@@ -2095,11 +2133,15 @@ const AUDIO_CACHE = "cs-audio-v1";
    tab closes. */
 const SAVE_LOCK = "cs-saving:";
 const SAVE_RETRY_MS = 30000;           // when the server says busy without a Retry-After
+/* serve.py's default SAVE_KBPS, for the estimate before a save starts; once
+   it runs, the rate actually measured takes over. */
+const SAVE_KBPS_GUESS = 256;
 
 const saving = {
   queue: [],            // episodes waiting their turn
   ep: null,             // the one downloading now
   pct: 0,
+  left: 0,              // seconds still to go, from the measured rate (0: not yet known)
   busy: false,          // the server's save slots are full; waiting to retry
   ctl: null,
   failed: Object.create(null),         // id -> true: the last attempt failed
@@ -2117,6 +2159,8 @@ function pathOf(url) {
 const isSaved = (ep) => store.cachedEps.indexOf(ep.id) !== -1;
 const epBytes = (ep) => ep.parts.reduce((sum, p) => sum + (p.bytes || 0), 0);
 const fmtMB = (bytes) => String(Math.max(1, Math.round(bytes / 1e6)));
+const minutes = (secs) => Math.max(1, Math.ceil(secs / 60));
+const saveMinutes = (ep) => minutes(epBytes(ep) * 8 / (SAVE_KBPS_GUESS * 1000));
 
 /* What the cloud button shows for an episode. */
 function saveState(ep) {
@@ -2141,13 +2185,16 @@ function renderOfflineChip() {
   const full = {
     idle: t("offline.save", { mb: mb }),
     queued: t("offline.queued"),
-    saving: t("offline.saving", { pct: saving.pct }),
+    saving: saving.left
+      ? t("offline.savingLeft", { pct: saving.pct, n: minutes(saving.left) })
+      : t("offline.saving", { pct: saving.pct }),
     ready: t("offline.ready"),
     error: t("offline.error"),
   }[state];
   const hint = {
-    idle: t("offline.hintSave"), queued: t("offline.hintStop"), saving: t("offline.hintStop"),
-    ready: t("offline.hintDelete"), error: t("offline.hintSave"),
+    idle: t("offline.hintSave", { n: saveMinutes(ep) }),
+    queued: t("offline.hintStop"), saving: t("offline.hintStop"),
+    ready: t("offline.hintDelete"), error: t("offline.hintSave", { n: saveMinutes(ep) }),
   }[state];
 
   /* The Greek wording is long; on a phone the icon carries the meaning and the
@@ -2195,6 +2242,9 @@ async function requestSave(ep) {
   } catch (e) { /* not fatal */ }
   delete saving.failed[ep.id];
   saving.queue.push(ep);
+  /* It runs inside the page, and a phone freezes a page left in the
+     background: say how long it takes, and to keep the app open. */
+  showToast(t("offline.started", { n: saveMinutes(ep) }));
   renderOfflineChip();
   pumpSaves();
 }
@@ -2210,6 +2260,7 @@ async function pumpSaves() {
   const ep = saving.queue.shift();
   saving.ep = ep;
   saving.pct = 0;
+  saving.left = 0;
   saving.busy = false;
   saving.ctl = new AbortController();
   renderOfflineChip();
@@ -2254,7 +2305,9 @@ async function saveEpisode(ep, signal) {
   for (const part of ep.parts) {
     const size = part.bytes || 1;
     if (!(await cache.match(pathOf(part.url)))) {
-      await savePart(cache, part, signal, (got) => {
+      await savePart(cache, part, signal, (got, secs) => {
+        /* Time left at this part's rate, once a few seconds have shown it. */
+        if (secs >= 5) saving.left = (total - before - got) / (got / secs);
         const pct = Math.min(99, Math.floor(((before + got) / total) * 100));
         if (pct !== saving.pct) { saving.pct = pct; renderOfflineChip(); }
       });
@@ -2280,6 +2333,7 @@ async function savePart(cache, part, signal, onProgress) {
     if (saving.busy) { saving.busy = false; renderOfflineChip(); }
 
     const chunks = [];
+    const t0 = performance.now();
     let got = 0;
     if (res.body) {
       const reader = res.body.getReader();
@@ -2288,7 +2342,7 @@ async function savePart(cache, part, signal, onProgress) {
         if (step.done) break;
         chunks.push(step.value);
         got += step.value.length;
-        onProgress(got);
+        onProgress(got, (performance.now() - t0) / 1000);
       }
     } else {
       chunks.push(await res.arrayBuffer());
@@ -2490,6 +2544,39 @@ function registerSW() {
     .catch((err) => console.warn("Service worker registration failed:", err));
 }
 
+/* An installed app can stay open for days, and the index is read once, at
+   boot. Back in the app after a while, ask again (usually a 304). If the
+   archive changed, offer a reload rather than rebuilding in place what a
+   playing episode, its series or a running save still point into. */
+const INDEX_RECHECK_MS = 6 * 3600 * 1000;
+let indexCheckedAt = 0;
+
+const indexShape = (seasons) => seasons.map((s) => s.episodes.map((ep) =>
+  ep.id + ":" + ep.parts.map((p) => p.url + "=" + p.bytes).join()).join("|")).join("/");
+
+async function recheckIndex() {
+  if (!DATA || !navigator.onLine || Date.now() - indexCheckedAt < INDEX_RECHECK_MS) return;
+  indexCheckedAt = Date.now();
+  try {
+    const res = await fetch("index.json", { cache: "no-cache" });
+    if (!res.ok) return;
+    const json = await res.json();
+    if (indexShape(json.seasons) !== indexShape(SEASONS)) showReloadNotice();
+  } catch (e) { /* offline or a blip: next time */ }
+}
+
+function showReloadNotice() {
+  if (document.getElementById("reload-notice")) return;
+  const el = document.createElement("button");
+  el.type = "button";
+  el.id = "reload-notice";
+  el.className = "notice notice-action";
+  el.dataset.i18n = "app.updated";             // re-translated on a language switch
+  el.textContent = t("app.updated");
+  el.addEventListener("click", () => location.reload());
+  noticeHost().prepend(el);
+}
+
 /* ------------------------------------------------------------------ boot */
 
 async function boot() {
@@ -2505,6 +2592,7 @@ async function boot() {
     const res = await fetch("index.json", { cache: "no-cache" });
     if (!res.ok) throw new Error(res.status + " " + res.statusText);
     json = await res.json();
+    indexCheckedAt = Date.now();
   } catch (err) {
     console.error("Could not load index.json (" + err.message + "). " +
       "If it is missing, run: python3 _site/build_index.py");
@@ -2559,16 +2647,29 @@ async function boot() {
 /* A saved position can point past an episode's last part: the episode was
    re-split or corrected in the archive since, or the state is old or hand
    edited. Such a position means nothing any more, and reading it would
-   break rendering on every load, so it is dropped. */
+   break rendering on every load, so it is dropped. A time past the end of
+   its part (a part since replaced by a shorter copy) starts that part from
+   the top, as playing it would anyway. */
 function dropStalePositions() {
   const stale = (id, part) => BY_ID[id] && part >= BY_ID[id].parts.length;
-  if (Object.keys(store.progress).some((id) => stale(id, store.progress[id].part))) {
+  const pastEnd = (id, pos) => {
+    const part = BY_ID[id] && BY_ID[id].parts[pos.part];
+    return !!part && part.dur > 0 && pos.time >= part.dur;
+  };
+  const prog = store.progress;
+  if (Object.keys(prog).some((id) => stale(id, prog[id].part) || pastEnd(id, prog[id]))) {
     update("progress", (p) => {
-      Object.keys(p).forEach((id) => { if (stale(id, p[id].part)) delete p[id]; });
+      Object.keys(p).forEach((id) => {
+        if (stale(id, p[id].part)) delete p[id];
+        else if (pastEnd(id, p[id])) p[id].time = 0;
+      });
     });
   }
   if (store.last && stale(store.last.id, store.last.part)) {
     store.last = null;
+    saveLast();
+  } else if (store.last && pastEnd(store.last.id, store.last)) {
+    store.last.time = 0;
     saveLast();
   }
 }

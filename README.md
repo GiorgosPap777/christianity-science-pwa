@@ -24,13 +24,15 @@ Greek podcast **Χριστιανισμός - Επιστήμη** (Christianity - 
   its end; tap the row to open it and see the parts, Μέρος 1ο first.
 - **New episodes** — episodes added since your last visit get a badge, a count
   on their season and a short list at the top until you play or dismiss them.
+  An app left open for days offers to refresh once the archive has changed.
 - **Keeps itself up to date** (optional) — a second container downloads new
   broadcasts from the official site into the archive as they appear; see
   [Downloading new episodes automatically](#downloading-new-episodes-automatically).
 - **Share a moment** — the share button gives a link such as
   `…/_site/#e=2025-10-30&t=754` that opens that episode at that point, paused.
 - **Resume anywhere** — playback position, "continue listening", and recently
-  played are remembered per browser.
+  played are remembered per browser. The last episode comes back paused, and
+  none of it is downloaded until you press play.
 - **Listened tracking** — auto-marked when the last part finishes, manually
   togglable, with an "unheard only" filter.
 - **Search** — accent-insensitive Greek matching, so `εξελιξη` finds `Εξέλιξη`,
@@ -123,8 +125,11 @@ is downloaded into `.incoming/` inside the archive and moved into its season
 folder only when every part is complete; an interrupted download carries on
 from the last complete part. Older broadcasts that are missing from the
 archive are listed in the log but not downloaded, since they may be missing on
-purpose; `--include-older` fetches them as well. `--dry-run` shows what would
-be downloaded, and `--max` (default 10) caps the episodes per run.
+purpose; `--include-older` fetches them as well. An episode whose download
+failed is tried again on the next run, even if a newer one was saved
+meanwhile. `--dry-run` shows what would be downloaded, `--max` (default 10)
+caps the episodes per run, and `--out` says where the rebuilt index goes
+(default `INDEX_OUT`; set it when trying the fetcher on a test archive).
 
 The site sometimes lists a broadcast before all of its parts are up. A new
 episode with fewer than the usual 4 parts waits in `.incoming/` and is
@@ -210,7 +215,7 @@ cannot be parsed — a missing part, non-contiguous numbering, an unreadable nam
 server is safe, and a scan that finds no episodes (an archive mount that is
 briefly missing) keeps the previous index unless `--allow-empty` is given.
 
-## Two things that will bite you
+## Three things that will bite you
 
 1. **Behind a reverse proxy, `Range` headers must be forwarded and responses
    must not be buffered**, or seeking inside an episode breaks. In nginx that
@@ -218,6 +223,14 @@ briefly missing) keeps the previous index unless `--allow-empty` is given.
 2. **Installing the app and saving for offline require a secure origin** —
    HTTPS, or `localhost`. On a plain `http://192.168.x.x` the site works
    normally, but neither the install prompt nor the Save button will appear.
+3. **Behind Cloudflare or another CDN, bypass its cache for `.mp3`.**
+   Cloudflare caches mp3 files by their extension. On a miss it drops the
+   `Range` header and fetches the whole part from your server first, so a seek
+   into a part nobody has played lately waits until most of the part has
+   crossed your uplink, at the paced rate. A Cache Rule for the player's
+   hostname, *URI path ends with `.mp3`* → *Bypass cache*, fixes it. Its
+   *Browser Cache TTL* also turns the server's `no-cache` on the app's scripts
+   into four hours; *Respect existing headers* keeps updates prompt.
 
 ## Why a custom server
 
@@ -235,6 +248,12 @@ saves, the chip shows progress, and tapping it again stops. Once saved, the
 episode plays with no network, seeking included, and tapping the chip offers
 to delete it. Saving more episodes queues them; there is no cap beyond the
 device's storage, which is checked first.
+
+At the paced rate below, a 40 MB episode takes about 20 minutes. The chip
+says roughly how long before it starts and how long is left while it runs.
+The download runs in the page, and a phone freezes a page left in the
+background unless it is playing, so the app asks to be kept open until the
+save finishes.
 
 A browser downloads as fast as the link allows, whatever the page asks, so
 the pacing happens on the server. A save asks for each part with `?save=1`,

@@ -331,6 +331,7 @@ class ArchiveHandler(SimpleHTTPRequestHandler):
             clean = (getattr(self, "path", "") or "").split("?", 1)[0].lower()
             if not self._has_header("accept-ranges"):
                 self.send_header("Accept-Ranges", "bytes")
+            self.send_header("X-Content-Type-Options", "nosniff")
             if clean.endswith("/sw.js"):
                 self.send_header("Service-Worker-Allowed", "/")
             if not self._has_header("cache-control"):

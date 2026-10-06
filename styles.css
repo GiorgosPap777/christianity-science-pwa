@@ -528,6 +528,18 @@ input[type="range"].volume { width: 5rem; flex: none; }
     margin: -2px; padding: 2px;               /* room for the focus ring */
   }
   .toolbar-btns::-webkit-scrollbar { display: none; }
+  .toolbar-btns[data-fade="end"] {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
+  }
+  .toolbar-btns[data-fade="start"] {
+    -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 2.5rem), transparent);
+    mask-image: linear-gradient(to left, #000 calc(100% - 2.5rem), transparent);
+  }
+  .toolbar-btns[data-fade="both"] {
+    -webkit-mask-image: linear-gradient(to right, transparent, #000 2.5rem, #000 calc(100% - 2.5rem), transparent);
+    mask-image: linear-gradient(to right, transparent, #000 2.5rem, #000 calc(100% - 2.5rem), transparent);
+  }
   .toolbar-btns .chip { flex: 1 0 auto; text-align: center; }
   /* Greek titles run to 80-100 characters; one line would show a third. */
   .ep-title {
@@ -757,6 +769,7 @@ body.searching #recent-section { display: none; }
   box-shadow: var(--shadow); text-align: center;
 }
 .notice.toast { background: var(--text); color: var(--bg); border-radius: 12px; }
+.notice-action { pointer-events: auto; border: 0; font: inherit; font-size: .8rem; cursor: pointer; }
 
 @media (max-width: 560px) {
   .install-sub { font-size: .78rem; }

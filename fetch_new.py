@@ -10,7 +10,9 @@ into the archive's own layout:
     <archive>/<N>ος Κύκλος Εκπομπών/<Title> - <D> <Month> <YYYY>/<n>.mp3
 
 Older broadcasts missing from the archive are only reported, since they may
-be missing on purpose; --include-older downloads them too.
+be missing on purpose; --include-older downloads them too. One whose download
+was begun (it has a folder in .incoming) is not missing on purpose: it is
+retried even after a newer one has been saved, say in the same run.
 
 An episode is downloaded into <archive>/.incoming first and moved into its
 season folder only when every part is complete, so neither the index nor
@@ -41,7 +43,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import make_lite
 from build_index import DATE_RE, MONTHS, SEASON_RE
@@ -73,6 +75,7 @@ LINK_RE = re.compile(
 PART_RE = re.compile(r"\((\d+)\)")
 TIMEOUT = 60
 CHUNK = 1 << 20
+MAX_PART_BYTES = 500 * 10**6   # the largest real part is ~40 MB; this guards the share
 
 
 def log(msg):
@@ -123,11 +126,14 @@ def parse_page(page):
         cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S | re.I)
         title = text(cells[1]) if len(cells) > 1 else ""
         for order, (href, season, y, m, d, fname) in enumerate(links):
+            url = urljoin(PAGE_URL, href)
+            if urlsplit(url).hostname != urlsplit(PAGE_URL).hostname:
+                continue          # the site links its own files; never another host's
             key = (int(y), int(m), int(d))
             ep = found.setdefault(key, {"season": int(season), "title": title, "parts": {}})
             pm = PART_RE.search(fname)
             n = int(pm.group(1)) if pm else order + 1
-            ep["parts"].setdefault(n, urljoin(PAGE_URL, href))
+            ep["parts"].setdefault(n, url)
     for ep in found.values():
         ep["parts"] = sorted(ep["parts"].items())
     return found
@@ -154,6 +160,21 @@ def archive_folders(root):
             if m and m.group(3) in MONTHS:
                 found[(int(m.group(4)), MONTHS[m.group(3)], int(m.group(2)))] = \
                     os.path.join(root, sdir, name)
+    return found
+
+
+def staged_dates(root):
+    """Dates with a download begun in .incoming: a failed attempt, or a short
+    episode waiting for its last parts."""
+    found = set()
+    base = os.path.join(root, INCOMING)
+    for sdir in (os.listdir(base) if os.path.isdir(base) else []):
+        if not SEASON_RE.match(sdir) or not os.path.isdir(os.path.join(base, sdir)):
+            continue
+        for name in os.listdir(os.path.join(base, sdir)):
+            m = DATE_RE.match(name)
+            if m and m.group(3) in MONTHS:
+                found.add((int(m.group(4)), MONTHS[m.group(3)], int(m.group(2))))
     return found
 
 
@@ -197,6 +218,8 @@ def download(url, dest):
         with urllib.request.urlopen(req, timeout=TIMEOUT) as res, open(tmp, "wb") as fh:
             expected = res.headers.get("Content-Length")
             expected = int(expected) if expected and expected.isdigit() else None
+            if expected is not None and expected > MAX_PART_BYTES:
+                raise ValueError(f"too large for a part: {expected} bytes")
             got = 0
             while True:
                 chunk = res.read(CHUNK)
@@ -206,6 +229,8 @@ def download(url, dest):
                     raise ValueError(f"not an mp3 ({res.headers.get('Content-Type')})")
                 fh.write(chunk)
                 got += len(chunk)
+                if got > MAX_PART_BYTES:
+                    raise ValueError(f"too large for a part: over {MAX_PART_BYTES} bytes")
         if got == 0 or (expected is not None and got != expected):
             raise ValueError(f"incomplete: {got} of {expected} bytes")
     except BaseException:
@@ -331,10 +356,12 @@ def complete_episode(root, folder, date, ep, dry_run):
     return True
 
 
-def rebuild_index(root, lite=None):
+def rebuild_index(root, lite=None, out=None):
     log("Rebuilding the index ...")
     cmd = [sys.executable, os.path.join(SITE_DIR, "build_index.py"),
            "--root", root, "--jobs", "4"]
+    if out:
+        cmd += ["--out", out]
     if lite:
         cmd += ["--lite", lite]
     res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -382,8 +409,9 @@ def run_once(args, cache, reported):
             log(f"  gave up on completing it for now: {e}")
             cache.clear()
     missing = sorted(d for d in site if d not in have)
-    newer = [d for d in missing if d > newest]
-    older = [d for d in missing if d < newest]
+    begun = staged_dates(root)
+    newer = [d for d in missing if d > newest or d in begun]
+    older = [d for d in missing if d not in newer]
 
     if older and not args.include_older and tuple(older) != reported.get("older"):
         reported["older"] = tuple(older)
@@ -435,6 +463,9 @@ def main():
                     help="also fetch older broadcasts that are missing from the archive")
     ap.add_argument("--max", type=int, default=10, help="episodes per run at most (default 10)")
     ap.add_argument("--no-index", action="store_true", help="do not rebuild the index afterwards")
+    ap.add_argument("--out", metavar="FILE",
+                    help="where the rebuilt index goes (default $INDEX_OUT, else "
+                         "_site/index.json; set it when trying a test archive)")
     ap.add_argument("--lite", default=LITE_ROOT, metavar="DIR",
                     help="also make 64 kbps copies of high-bitrate parts here "
                          "(default $LITE_ROOT)")
@@ -473,7 +504,7 @@ def main():
             except Exception as e:
                 log(f"Making smaller copies failed: {e}")
         if (saved or made) and not args.no_index and not args.dry_run:
-            rebuild_index(args.root, args.lite)
+            rebuild_index(args.root, args.lite, args.out)
         if not args.every:
             return 1 if failed else 0
         time.sleep(args.every)

@@ -186,10 +186,12 @@ def main():
             entries = sorted(os.listdir(epath))
             mp3s = []
             for f in entries:
+                if f.startswith("."):
+                    continue            # macOS "._1.mp3" and the like; serve.py refuses them
                 if f.lower().endswith(".mp3"):
                     stem = os.path.splitext(f)[0]
                     mp3s.append((int(stem) if stem.isdigit() else 10**6, f))
-                elif not f.startswith("."):
+                else:
                     warnings.append(f"Non-mp3 file inside episode folder: {ep_id}/{f}")
             mp3s.sort()
 
