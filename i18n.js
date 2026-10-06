@@ -16,7 +16,7 @@ const I18N = {
     "search.results.one": "{n} αποτέλεσμα",
     "search.noResults": "Καμία εκπομπή δεν ταιριάζει με «{q}»",
 
-    "filter.unheard": "Μόνο ανήκουστες",
+    "filter.unheard": "Μη ακουσμένες",
     "sort.newest": "Νεότερες πρώτα",
     "sort.oldest": "Παλαιότερες πρώτα",
     "nav.expandAll": "Άνοιγμα όλων",
@@ -25,8 +25,8 @@ const I18N = {
     "season.label": "{n}ος Κύκλος Εκπομπών",
     "season.episodes": "{n} εκπομπές",
     "season.episodes.one": "{n} εκπομπή",
-    "season.unheard": "{n} ανήκουστες",
-    "season.unheard.one": "{n} ανήκουστη",
+    "season.unheard": "{n} μη ακουσμένες",
+    "season.unheard.one": "{n} μη ακουσμένη",
     "season.allListened": "όλες ακουσμένες",
     "season.progress": "{done} από {total} ακουσμένες",
 
@@ -47,7 +47,7 @@ const I18N = {
     "ep.saved": "Αποθηκευμένη στη συσκευή",
     "ep.listened": "Ακουσμένη",
     "ep.markListened": "Σήμανση ως ακουσμένη",
-    "ep.markUnlistened": "Σήμανση ως ανήκουστη",
+    "ep.markUnlistened": "Σήμανση ως μη ακουσμένη",
     "ep.play": "Αναπαραγωγή",
 
     "player.play": "Αναπαραγωγή",
